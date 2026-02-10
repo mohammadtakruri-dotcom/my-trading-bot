@@ -3,7 +3,7 @@ import time
 import sys
 import requests
 
-# استخدام KuCoin لضمان استقرار الاتصال السحابي
+# استخدام KuCoin لضمان استقرار الاتصال وتجنب القيود الجغرافية
 exchange = ccxt.kucoin()
 
 def run_trading_bot():
@@ -15,7 +15,7 @@ def run_trading_bot():
     btc_held = 0.0
     buy_price = 0.0
     
-    # استبدل هذا الرابط برابط ملف الـ PHP على سيرفرك الخاص
+    # استبدل هذا الرابط برابط ملف الـ PHP على سيرفرك الخاص (مثلاً في InfinityFree)
     API_ENDPOINT = "https://your-domain.com/update_bot.php"
 
     while True:
@@ -23,7 +23,7 @@ def run_trading_bot():
             ticker = exchange.fetch_ticker('BTC/USDT')
             current_price = ticker['last']
             
-            # منطق تداول وهمي بسيط (شراء عند التشغيل)
+            # منطق تداول وهمي بسيط للبدء
             if btc_held == 0:
                 buy_price = current_price
                 btc_held = balance_usd / buy_price
@@ -39,18 +39,18 @@ def run_trading_bot():
                 'action': action
             }
 
-            # إرسال البيانات (POST)
+            # إرسال البيانات إلى واجهتك
             try:
                 requests.post(API_ENDPOINT, data=payload, timeout=5)
             except:
-                pass
+                pass # استمرار العمل حتى لو تعذر الوصول للموقع مؤقتاً
 
             print(f"تم تحديث الواجهة بالسعر: {current_price}")
             sys.stdout.flush()
-            time.sleep(20) # فحص كل 20 ثانية
+            time.sleep(15) # تحديث كل 15 ثانية
 
         except Exception as e:
-            print(f"تنبيه: {e}")
+            print(f"تنبيه تقني: {e}")
             sys.stdout.flush()
             time.sleep(10)
 
