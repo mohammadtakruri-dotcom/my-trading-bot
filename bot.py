@@ -1,43 +1,54 @@
 import ccxt
 import time
 import sys
+import requests # مكتبة لإرسال البيانات لصفحة الويب
 
-# استخدام KuCoin لتجنب قيود المواقع الجغرافية
 exchange = ccxt.kucoin()
 
 def run_trading_bot():
-    print("--- الروبوت يعمل الآن ويرسل البيانات للواجهة ---")
+    print("--- الروبوت يعمل الآن ويرسل البيانات لصفحتك الاحترافية ---")
     sys.stdout.flush()
     
-    # تعريف المتغيرات لتجنب خطأ NameError الذي ظهر في صورك
+    # تعريف المتغيرات لتجنب خطأ NameError تماماً
     balance_usd = 1000.0
     btc_held = 0.0
-    last_action = "انتظار"
-    buy_price = 0.0 
+    buy_price = 0.0
+    
+    # رابط ملف PHP الخاص بك (استبدله بالرابط الحقيقي على استضافتك)
+    api_url = "https://your-domain.com/update_bot.php"
 
     while True:
         try:
             ticker = exchange.fetch_ticker('BTC/USDT')
             current_price = ticker['last']
             
-            # منطق بسيط للتداول الوهمي
+            # تنفيذ أول شراء وهمي لبدء الدورة
             if btc_held == 0:
                 buy_price = current_price
                 btc_held = balance_usd / buy_price
                 balance_usd = 0
-                last_action = f"شراء بسعر {buy_price}"
-            elif btc_held > 0 and current_price > (buy_price * 1.005):
-                balance_usd = btc_held * current_price
-                btc_held = 0
-                last_action = f"بيع بربح عند {current_price}"
+                action = "شراء أول"
+            else:
+                action = "مراقبة السوق"
 
-            # طباعة النتائج بشكل منظم للسيرفر
-            print(f"STATUS|{current_price}|{balance_usd + (btc_held * current_price)}|{last_action}")
+            # إرسال البيانات لصفحة الويب الخاصة بك
+            data = {
+                'price': current_price,
+                'total': balance_usd + (btc_held * current_price),
+                'action': action
+            }
+            # محاولة إرسال البيانات (ستعمل بمجرد تجهيز ملف PHP)
+            try:
+                requests.post(api_url, data=data, timeout=5)
+            except:
+                pass
+
+            print(f"تم تحديث البيانات: {current_price} USDT")
             sys.stdout.flush()
-
             time.sleep(15)
+
         except Exception as e:
-            print(f"ERROR|{e}")
+            print(f"تنبيه: {e}")
             sys.stdout.flush()
             time.sleep(10)
 
