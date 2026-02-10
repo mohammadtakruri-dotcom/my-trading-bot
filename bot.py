@@ -1,50 +1,58 @@
 import ccxt
 import time
 import sys
-import requests # مكتبة لإرسال البيانات لواجهتك
+import requests
 
-# استخدام KuCoin لتجنب الحظر الجغرافي
+# استخدام KuCoin لضمان استقرار الاتصال السحابي
 exchange = ccxt.kucoin()
 
-def run_bot():
-    print("--- البوت يعمل الآن ويقوم بتغذية لوحة التحكم ---")
+def run_trading_bot():
+    print("--- الروبوت متصل الآن بلوحة تحكم التكروري ---")
     sys.stdout.flush()
     
-    # إعدادات المحفظة الوهمية
-    balance = 1000.0
+    # تعريف المتغيرات لتجنب أخطاء التعريف (NameError)
+    balance_usd = 1000.0
     btc_held = 0.0
+    buy_price = 0.0
     
-    # الرابط الخاص بملف الاستقبال على موقعك (استبدله بالرابط الحقيقي)
-    WEB_API_URL = "https://your-domain.com/update_dashboard.php"
+    # استبدل هذا الرابط برابط ملف الـ PHP على سيرفرك الخاص
+    API_ENDPOINT = "https://your-domain.com/update_bot.php"
 
     while True:
         try:
             ticker = exchange.fetch_ticker('BTC/USDT')
-            price = ticker['last']
+            current_price = ticker['last']
             
-            # حساب القيمة الإجمالية
-            total_value = balance + (btc_held * price)
-            
-            # إرسال البيانات للواجهة
-            payload = {
-                'price': f"${price:,.2f}",
-                'total': f"${total_value:,.2f}",
-                'action': "شراء" if btc_held > 0 else "مراقبة"
-            }
-            
-            try:
-                requests.post(WEB_API_URL, data=payload, timeout=5)
-            except:
-                pass # تجاهل إذا كان الموقع متوقفاً مؤقتاً
+            # منطق تداول وهمي بسيط (شراء عند التشغيل)
+            if btc_held == 0:
+                buy_price = current_price
+                btc_held = balance_usd / buy_price
+                balance_usd = 0
+                action = "شراء"
+            else:
+                action = "مراقبة السوق"
 
-            print(f"تم إرسال السعر: {price}")
+            # تجهيز البيانات للإرسال إلى الواجهة
+            payload = {
+                'price': f"${current_price:,.2f}",
+                'total': f"${(balance_usd + btc_held * current_price):,.2f}",
+                'action': action
+            }
+
+            # إرسال البيانات (POST)
+            try:
+                requests.post(API_ENDPOINT, data=payload, timeout=5)
+            except:
+                pass
+
+            print(f"تم تحديث الواجهة بالسعر: {current_price}")
             sys.stdout.flush()
-            time.sleep(15)
+            time.sleep(20) # فحص كل 20 ثانية
 
         except Exception as e:
-            print(f"خطأ: {e}")
+            print(f"تنبيه: {e}")
             sys.stdout.flush()
             time.sleep(10)
 
 if __name__ == "__main__":
-    run_bot()
+    run_trading_bot()
