@@ -14,7 +14,7 @@ def run_trading_bot():
     buy_price = 0.0
     
     # ضع رابطك الحقيقي هنا (مثال: https://mohammed.com/update_bot.php)
-    API_ENDPOINT = "https://3rood.gt.tc/index.php"
+    API_ENDPOINT = "https://3rood.gt.tc/update_bot.php"
 
     while True:
         try:
