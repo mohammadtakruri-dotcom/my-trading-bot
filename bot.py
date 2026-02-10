@@ -1,56 +1,50 @@
 import ccxt
 import time
 import sys
-import requests # مكتبة لإرسال البيانات لصفحة الويب
+import requests # مكتبة لإرسال البيانات لواجهتك
 
+# استخدام KuCoin لتجنب الحظر الجغرافي
 exchange = ccxt.kucoin()
 
-def run_trading_bot():
-    print("--- الروبوت يعمل الآن ويرسل البيانات لصفحتك الاحترافية ---")
+def run_bot():
+    print("--- البوت يعمل الآن ويقوم بتغذية لوحة التحكم ---")
     sys.stdout.flush()
     
-    # تعريف المتغيرات لتجنب خطأ NameError تماماً
-    balance_usd = 1000.0
+    # إعدادات المحفظة الوهمية
+    balance = 1000.0
     btc_held = 0.0
-    buy_price = 0.0
     
-    # رابط ملف PHP الخاص بك (استبدله بالرابط الحقيقي على استضافتك)
-    api_url = "https://your-domain.com/update_bot.php"
+    # الرابط الخاص بملف الاستقبال على موقعك (استبدله بالرابط الحقيقي)
+    WEB_API_URL = "https://your-domain.com/update_dashboard.php"
 
     while True:
         try:
             ticker = exchange.fetch_ticker('BTC/USDT')
-            current_price = ticker['last']
+            price = ticker['last']
             
-            # تنفيذ أول شراء وهمي لبدء الدورة
-            if btc_held == 0:
-                buy_price = current_price
-                btc_held = balance_usd / buy_price
-                balance_usd = 0
-                action = "شراء أول"
-            else:
-                action = "مراقبة السوق"
-
-            # إرسال البيانات لصفحة الويب الخاصة بك
-            data = {
-                'price': current_price,
-                'total': balance_usd + (btc_held * current_price),
-                'action': action
+            # حساب القيمة الإجمالية
+            total_value = balance + (btc_held * price)
+            
+            # إرسال البيانات للواجهة
+            payload = {
+                'price': f"${price:,.2f}",
+                'total': f"${total_value:,.2f}",
+                'action': "شراء" if btc_held > 0 else "مراقبة"
             }
-            # محاولة إرسال البيانات (ستعمل بمجرد تجهيز ملف PHP)
+            
             try:
-                requests.post(api_url, data=data, timeout=5)
+                requests.post(WEB_API_URL, data=payload, timeout=5)
             except:
-                pass
+                pass # تجاهل إذا كان الموقع متوقفاً مؤقتاً
 
-            print(f"تم تحديث البيانات: {current_price} USDT")
+            print(f"تم إرسال السعر: {price}")
             sys.stdout.flush()
             time.sleep(15)
 
         except Exception as e:
-            print(f"تنبيه: {e}")
+            print(f"خطأ: {e}")
             sys.stdout.flush()
             time.sleep(10)
 
 if __name__ == "__main__":
-    run_trading_bot()
+    run_bot()
