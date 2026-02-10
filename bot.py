@@ -6,16 +6,10 @@ import requests
 exchange = ccxt.kucoin()
 
 def run_trading_bot():
-    print("--- محاولة الاتصال بلوحة تحكم التكروري ---")
+    print("--- الروبوت يرسل البيانات الآن إلى MySQL ---")
     sys.stdout.flush()
     
-    balance_usd = 1000.0
-    btc_held = 0.0
-    buy_price = 0.0
-    
     API_ENDPOINT = "https://3rood.gt.tc/update_bot.php"
-    
-    # إضافة Headers لجعل الطلب يبدو طبيعياً للسيرفر
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Content-Type': 'application/x-www-form-urlencoded'
@@ -24,31 +18,23 @@ def run_trading_bot():
     while True:
         try:
             ticker = exchange.fetch_ticker('BTC/USDT')
-            current_price = ticker['last']
+            price = f"${ticker['last']:,.2f}"
             
-            if btc_held == 0:
-                buy_price = current_price
-                btc_held = balance_usd / buy_price
-                balance_usd = 0
-                action = "شراء"
-            else:
-                action = "مراقبة السوق"
-
             payload = {
-                'price': f"${current_price:,.2f}",
-                'total': f"${(balance_usd + btc_held * current_price):,.2f}",
-                'action': action
+                'price': price,
+                'total': '$1,000.00', # تجريبي
+                'action': 'مراقبة السوق'
             }
 
             try:
-                # إرسال الطلب مع التحقق من الاتصال
-                response = requests.post(API_ENDPOINT, data=payload, headers=headers, timeout=15)
-                print(f"استجابة السيرفر ({response.status_code}): {response.text}")
+                # إرسال البيانات مع تمديد وقت الانتظار (Timeout)
+                response = requests.post(API_ENDPOINT, data=payload, headers=headers, timeout=20)
+                print(f"الحالة: {response.status_code} | الرد: {response.text}")
             except Exception as e:
-                print(f"عطل في الاتصال مع السيرفر: {e}")
+                print(f"عطل مؤقت في الشبكة: {e}")
 
             sys.stdout.flush()
-            time.sleep(20)
+            time.sleep(30) # تحديث كل 30 ثانية لتخفيف الضغط
 
         except Exception as e:
             print(f"خطأ تقني: {e}")
