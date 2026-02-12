@@ -1,59 +1,80 @@
 import sys
 import time
 import threading
-from flask import Flask # مكتبة بسيطة لفتح المنفذ
+import os
+from flask import Flask
 import ccxt
 import cloudscraper
 
-# 1. إعداد خادم وهمي لإرضاء منصة Render
+# 1. إعداد خادم ويب بسيط جداً لإرضاء منصة Render ومنع خطأ الـ Port
 app = Flask(__name__)
 
 @app.route('/')
-def home():
-    return "Bot is running..."
+def health_check():
+    return "Bot is Alive!", 200
 
-def run_web_server():
-    # Render يرسل رقم المنفذ عبر متغير بيئة يسمى PORT
-    import os
-    port = int(os.environ.get("PORT", 8080))
+def start_web_server():
+    # Render يرسل رقم المنفذ في متغير بيئة يسمى PORT
+    port = int(os.environ.get("PORT", 10000))
+    # تشغيل السيرفر على 0.0.0.0 ليتمكن Render من رؤيته
     app.run(host='0.0.0.0', port=port)
 
-# 2. وظيفة البوت الأساسية
+# 2. وظيفة التداول والإرسال الأساسية
 def run_trading_bot():
-    print("--- بدأ تشغيل البوت مع تجاوز الحماية والمنفذ ---")
+    print("--- الروبوت يعمل الآن مع محاكاة متصفح متقدمة ---")
+    
     API_ENDPOINT = "https://3rood.gt.tc/update_bot.php"
     exchange = ccxt.kucoin()
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome','platform': 'windows','desktop': True})
+    
+    # إنشاء scraper يحاكي متصفح كامل لتجاوز JS Challenge
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
 
     balance_usd = 1000.0
     btc_held = 0.0
 
     while True:
         try:
+            # جلب سعر البيتكوين
             ticker = exchange.fetch_ticker('BTC/USDT')
             current_price = ticker['last']
+            
             payload = {
                 'price': f"${current_price:,.2f}",
                 'total': f"${(balance_usd + (btc_held * current_price)):,.2f}",
-                'action': "مراقبة مستمرة"
+                'action': "مراقبة نشطة (تجاوز الحماية)"
             }
-            
-            # محاولة الإرسال
+
+            # محاولة الإرسال باستخدام Scraper
             try:
                 response = scraper.post(API_ENDPOINT, data=payload, timeout=30)
-                print(f"[{time.strftime('%H:%M:%S')}] الحالة: {response.status_code}")
+                
+                # التحقق من نجاح التجاوز
+                if "slowAES" in response.text:
+                    print(f"[{time.strftime('%H:%M:%S')}] لا تزال الحماية قوية، نحاول مجدداً...")
+                else:
+                    print(f"[{time.strftime('%H:%M:%S')}] تم الإرسال بنجاح! الحالة: {response.status_code}")
+            
             except Exception as e:
-                print(f"خطأ إرسال: {e}")
+                print(f"خطأ في الاتصال: {e}")
 
             sys.stdout.flush()
-            time.sleep(30)
+            time.sleep(30) # فحص كل 30 ثانية
+
         except Exception as e:
-            print(f"خطأ في جلب البيانات: {e}")
+            print(f"خطأ تقني: {e}")
             time.sleep(10)
 
 if __name__ == "__main__":
-    # تشغيل الخادم الوهمي في "خيط" منفصل (Thread) لكي لا يعطل البوت
-    threading.Thread(target=run_web_server).start()
+    # تشغيل سيرفر الويب في الخلفية حتى لا يتوقف البوت
+    web_thread = threading.Thread(target=start_web_server)
+    web_thread.daemon = True
+    web_thread.start()
     
-    # تشغيل البوت
+    # تشغيل البوت الأساسي
     run_trading_bot()
