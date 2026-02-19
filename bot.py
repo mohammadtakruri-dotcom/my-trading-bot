@@ -10,8 +10,8 @@ load_dotenv()
 
 # تهيئة الاتصال بباينانس مع نظام الأمان
 exchange = ccxt.binance({
-    'apiKey': os.getenv('ecHft3mkwGYEmdgkAgU9NxbLG9rQ0F7tEvguAty5VTlAD6OFkViku2TLrWE3rpUC'),
-    'secret': os.getenv('QkmJ60G43gPtixzbKAtikJJUbvynLeJe2ci849w1qO74Ht2sBGON4rFwxlRQL2BV'),
+    'apiKey': os.getenv('NpU0M5UXBSptfwhaDCiV0fLVkcrjcU4Tvnu3deIwEojasUY40P86f4woNJEfqe6r'),
+    'secret': os.getenv('ATaA2II1KD6Y9wAuXaAudCbRULT9WnOqTiZ04PTj0sYTdMdiebv4Ue9Wfi3lfxfn'),
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
 })
