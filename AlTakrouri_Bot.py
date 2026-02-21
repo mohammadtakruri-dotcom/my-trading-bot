@@ -1,73 +1,65 @@
-import ccxt, time, os
-from dotenv import load_dotenv
+import ccxt, time, os, requests, threading
+from flask import Flask
 
-# تحميل الإعدادات (إذا كنت تستخدم ملف .env محلياً)
-load_dotenv()
+app = Flask(__name__)
 
-# تهيئة الاتصال بمفاتيحك المفعّلة (robot)
+# --- الإعدادات بمفاتيح robot المفعّلة ---
+API_KEY = 'NpU0M5UXBSptfwhaDCiV0fLVkcrjcU4Tvnu3delwEojasUY40P86f4woNJefqe6r'
+SECRET_KEY = 'ATaA2II1KD6Y9wAUXaAudCbRULT9WnOqTiZ04PTj0sYTmdiebv4Ue9Wfi3lfxfn'
+
 exchange = ccxt.binance({
-    'apiKey': 'NpU0M5UXBSptfwhaDCiV0fLVkcrjcU4Tvnu3delwEojasUY40P86f4woNJefqe6r',
-    'secret': 'ATaA2II1KD6Y9wAUXaAudCbRULT9WnOqTiZ04PTj0sYTmdiebv4Ue9Wfi3lfxfn',
+    'apiKey': API_KEY,
+    'secret': SECRET_KEY,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'spot',
-        'adjustForTimeDifference': True, # حل مشكلة فارق التوقيت في السيرفرات
-        'recvWindow': 15000              # توسيع نافذة القبول لضمان تنفيذ الأوامر
+        'adjustForTimeDifference': True, # لحل مشكلة توقيت السيرفر
+        'recvWindow': 15000
     }
 })
 
-# صمامات الأمان المالية
-MIN_BALANCE_RESERVE = 10.0  # رصيد احتياطي (أمان)
-TRADE_AMOUNT_USDT = 11.0    # الحد الأدنى لتجاوز فلتر NOTIONAL في باينانس
+# بيانات التنبيه (تيلجرام)
+TG_TOKEN = '8588741495:AAEYDfLoXnJVFbtMEdyjdNrZznwdSdJs0WQ'
+TG_ID = '5429169001'
 
-def get_account_balance():
-    """جلب الرصيد والتأكد من صحة المفاتيح"""
+def send_tg(msg):
     try:
-        balance = exchange.fetch_balance()
-        usdt_free = float(balance.get('USDT', {}).get('free', 0))
-        # flush=True لضمان ظهور النتائج فوراً في سجلات DigitalOcean
-        print(f"💰 الرصيد الحالي المكتشف في محفظتك: {usdt_free:.2f} USDT", flush=True)
-        return usdt_free
-    except Exception as e:
-        # إذا ظهر خطأ Invalid API-Key هنا، تأكد من تحديث الـ IP في باينانس
-        print(f"⚠️ تنبيه: فشل الاتصال، تأكد من إعدادات الـ IP في باينانس. الخطأ: {e}", flush=True)
-        return None
+        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", 
+                     data={"chat_id": TG_ID, "text": msg, "parse_mode": "HTML"})
+    except:
+        pass
 
-def scan_market_opportunities():
-    """رادار مسح العملات الصاعدة (أكثر من 5%)"""
-    try:
-        tickers = exchange.fetch_tickers()
-        gainers = []
-        for symbol, ticker in tickers.items():
-            if '/USDT' in symbol and ticker['percentage'] is not None:
-                # وضع المقامر: اقتناص العملات التي صعدت بأكثر من 5%
-                if ticker['percentage'] > 5:  
-                    gainers.append({'symbol': symbol, 'pct': ticker['percentage']})
-        return sorted(gainers, key=lambda x: x['pct'], reverse=True)[:5]
-    except Exception as e:
-        print(f"❌ خطأ في مسح السوق: {e}", flush=True)
-        return []
+@app.route('/')
+def home():
+    # هذه الواجهة للرد على DigitalOcean Health Check
+    return "📡 رادار التكروري السحابي يعمل بنجاح وحالته Healthy!"
 
-print("🚀 انطلق نظام رادار التكروري المضمون في السحابة...", flush=True)
-
-while True:
-    try:
-        balance = get_account_balance()
-        
-        if balance is not None:
-            # التحقق من توفر رصيد كافٍ (41.14 USDT)
-            if balance > (TRADE_AMOUNT_USDT + MIN_BALANCE_RESERVE):
-                opportunities = scan_market_opportunities()
-                if not opportunities:
-                    print("⚖️ السوق حالياً مستقر، الرادار يبحث عن عملات صاعدة...", flush=True)
-                
-                for opp in opportunities:
-                    print(f"🔥 فرصة مكتشفة: {opp['symbol']} بصعود {opp['pct']:.2f}%", flush=True)
-            else:
-                print(f"🛑 الرصيد المتاح ({balance:.2f}) يقل عن حد الأمان، وضع المراقبة مفعل.", flush=True)
-                
-    except Exception as main_error:
-        print(f"⚠️ خطأ في الدورة الحالية: {main_error}", flush=True)
+def trading_logic():
+    print("🚀 انطلق المحرك السحابي.. جاري فحص الرصيد والفرص..", flush=True)
+    while True:
+        try:
+            # الروبوت يراقب رصيدك الـ 41.14 USDT
+            bal = exchange.fetch_balance()
+            usdt = float(bal.get('USDT', {}).get('free', 0))
+            print(f"💰 الرصيد الحالي المكتشف: {usdt:.2f} USDT", flush=True)
             
-    # انتظار دقيقة واحدة قبل الفحص القادم لضمان استمرارية العمل
-    time.sleep(60)
+            if usdt >= 11.5:
+                tickers = exchange.fetch_tickers()
+                for sym, t in tickers.items():
+                    if '/USDT' in sym and t['percentage'] and t['percentage'] > 5.0:
+                        # تنفيذ الشراء بـ 11 USDT لتجاوز فلتر NOTIONAL
+                        exchange.create_market_buy_order(sym, 11)
+                        send_tg(f"✅ <b>تم الشراء بنجاح!</b>\nالعملة: {sym}\nالمبلغ: 11 USDT")
+                        print(f"🎯 تم شراء {sym}", flush=True)
+                        break 
+        except Exception as e:
+            print(f"⚠️ خطأ في المحرك: {str(e)[:50]}", flush=True)
+        
+        time.sleep(60) # فحص كل دقيقة
+
+# تشغيل محرك التداول في الخلفية لضمان استجابة Flask
+threading.Thread(target=trading_logic, daemon=True).start()
+
+if __name__ == '__main__':
+    # استخدام المنفذ 8080 المطلوب من DigitalOcean
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
