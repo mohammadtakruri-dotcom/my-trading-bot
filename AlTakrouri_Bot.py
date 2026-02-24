@@ -6,8 +6,7 @@ import threading
 from flask import Flask
 
 # إعداد واجهة الويب لضمان بقاء التطبيق نشطاً في DigitalOcean
-app = Flask(Takrouri_Cloud_Bot)
-
+app = Flask(__name__)
 # --- جلب مفاتيح Takrouri_Cloud_Bot من النظام ---
 API_KEY = os.getenv('BINANCE_API_KEY')
 SECRET_KEY = os.getenv('BINANCE_SECRET_KEY')
