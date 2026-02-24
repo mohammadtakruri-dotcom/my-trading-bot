@@ -17,7 +17,7 @@ SECRET_KEY = os.getenv('BINANCE_SECRET_KEY')
 DB_CONFIG = {
     'host': 'sql313.infinityfree.com',
     'user': 'if0_40995422',
-    'password': 'Ta086020336MO', # كلمة سر MySQL الصحيحة
+    'password': 'Ta086020336MO', # كلمة سر MySQL الحقيقية
     'database': 'if0_40995422_database'
 }
 
@@ -31,7 +31,6 @@ exchange = ccxt.binance({
     'options': {'adjustForTimeDifference': True}
 })
 
-# --- دالة إرسال التنبيهات مع الحماية ---
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
@@ -39,22 +38,18 @@ def send_telegram(msg):
     except Exception as e:
         print(f"⚠️ خطأ تيلجرام: {e}")
 
-# --- دالة الربط مع قاعدة البيانات (محاولة 3 مرات) ---
 def execute_db_query(query, params):
-    for i in range(3):
-        try:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            conn.commit()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"⚠️ محاولة اتصال SQL فاشلة ({i+1}): {e}")
-            time.sleep(2)
-    return False
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"⚠️ خطأ SQL: {e}")
+        return False
 
-# --- دراسة القوة النسبية للسوق (RSI) ---
 def calculate_rsi(symbol):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
@@ -62,11 +57,11 @@ def calculate_rsi(symbol):
         delta = df['c'].diff()
         up, down = delta.clip(lower=0), -1 * delta.clip(upper=0)
         rs = up.ewm(com=13).mean() / down.ewm(com=13).mean()
-        return 100 - (100 / (1 + rs)).iloc[-1]
+        rsi = 100 - (100 / (1 + rs)).iloc[-1]
+        return rsi if not pd.isna(rsi) else None # تجنب إرجاع NaN
     except:
-        return 50
+        return None
 
-# --- محرك المراقبة (البيع الآلي واليدوي) ---
 def monitor_trades():
     while True:
         try:
@@ -78,10 +73,13 @@ def monitor_trades():
 
             for trade in trades:
                 ticker = exchange.fetch_ticker(trade['symbol'])
-                current_p = ticker['last']
+                current_p = ticker.get('last')
+                
+                if current_p is None: continue # حماية من القيم الفارغة
+
                 change = ((current_p - trade['buy_price']) / trade['buy_price']) * 100
                 
-                # تنفيذ البيع (ربح 10% أو خسارة 5% أو طلب يدوي من PHP)
+                # تنفيذ البيع التلقائي أو اليدوي من PHP
                 if change >= 10.0 or change <= -5.0 or trade['status'] == 'PENDING_SELL':
                     balance = exchange.fetch_balance()
                     symbol_only = trade['symbol'].split('/')[0]
@@ -98,45 +96,47 @@ def monitor_trades():
             pass
         time.sleep(20)
 
-# --- محرك التداول (الشراء الذكي المتغير) ---
 def trading_engine():
     blacklist = ['WAVES/USDT', 'XMR/USDT', 'ANT/USDT']
-    send_telegram("🚀 <b>رادار التكروري انطلق الآن!</b>")
+    send_telegram("🚀 <b>محرك التكروري يعمل الآن بدون أخطاء!</b>")
     
     while True:
         try:
             balance = exchange.fetch_balance()
             usdt_free = float(balance.get('USDT', {}).get('free', 0))
             
-            # الشراء بحد أدنى 11$ وحد أقصى 30$
-            if usdt_free >= 11.0:
-                buy_amt = round(random.uniform(11.0, min(30.0, usdt_free)), 2)
+            # الشراء بحد أدنى 10.5$ (مرونة أكثر)
+            if usdt_free >= 10.5:
+                buy_amt = round(random.uniform(10.5, min(30.0, usdt_free)), 2)
                 tickers = exchange.fetch_tickers()
                 
                 for sym, t in tickers.items():
-                    if '/USDT' in sym and sym not in blacklist:
-                        rsi = calculate_rsi(sym)
-                        # شروط الشراء: صعود أكثر من 5% و RSI أقل من 70
-                        if t['percentage'] > 5.0 and rsi < 70:
-                            exchange.create_market_buy_order(sym, buy_amt)
-                            execute_db_query(
-                                "INSERT INTO trades (symbol, buy_price, amount_usdt) VALUES (%s, %s, %s)",
-                                (sym, t['last'], buy_amt)
-                            )
-                            send_telegram(f"🔔 <b>عملية شراء جديدة</b>\nالعملة: {sym}\nالمبلغ: {buy_amt}$\nقوة RSI: {rsi:.1f}")
-                            break # شراء عملة واحدة في كل دورة لتوزيع المخاطر
+                    # حماية من خطأ NoneType المكتشف في السجلات
+                    change_24h = t.get('percentage')
+                    last_p = t.get('last')
+
+                    if '/USDT' in sym and change_24h is not None and last_p is not None:
+                        if change_24h > 5.0 and sym not in blacklist:
+                            rsi = calculate_rsi(sym)
+                            # التأكد أن RSI قيمة عددية وآمنة
+                            if rsi is not None and rsi < 70:
+                                exchange.create_market_buy_order(sym, buy_amt)
+                                execute_db_query(
+                                    "INSERT INTO trades (symbol, buy_price, amount_usdt) VALUES (%s, %s, %s)",
+                                    (sym, last_p, buy_amt)
+                                )
+                                send_telegram(f"🔔 <b>شراء ذكي جديد</b>\nالعملة: {sym}\nالمبلغ: {buy_amt}$\nقوة RSI: {rsi:.1f}")
+                                break 
         except Exception as e:
             print(f"⚠️ خطأ محرك: {e}")
         time.sleep(60)
 
-# --- تشغيل الخيوط (Threads) والموقع ---
 threading.Thread(target=trading_engine, daemon=True).start()
 threading.Thread(target=monitor_trades, daemon=True).start()
 
 @app.route('/')
 def home():
-    return "<h1>رادار التكروري: المحرك والاتصال بقاعدة البيانات يعملان ✅</h1>"
+    return "<h1>رادار التكروري: المحرك مستقر 100% ✅</h1>"
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
