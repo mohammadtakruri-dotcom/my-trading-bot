@@ -1,41 +1,23 @@
-import ccxt
-import time
-import os
-import requests
-import threading
+import ccxt, time, os, requests, threading, random
 import pandas as pd
 import mysql.connector
 from flask import Flask
 
 app = Flask(__name__)
 
-# إعدادات الاتصال (تأكد من وضع بياناتك الحقيقية)
-API_KEY = os.getenv('BINANCE_API_KEY')
-SECRET_KEY = os.getenv('BINANCE_SECRET_KEY')
+# إعدادات الاتصال ببيانات InfinityFree الحقيقية
 DB_CONFIG = {
-    'host': 'sql313.infinityfree.com', # من صورتك الأخيرة
+    'host': 'sql313.infinityfree.com',
     'user': 'if0_40995422',
     'password': 'Ta086020336MO',
     'database': 'if0_40995422_database'
 }
 
 exchange = ccxt.binance({
-    'apiKey': API_KEY, 'secret': SECRET_KEY,
-    'enableRateLimit': True,
-    'options': {'adjustForTimeDifference': True, 'recvWindow': 60000}
+    'apiKey': os.getenv('BINANCE_API_KEY'),
+    'secret': os.getenv('BINANCE_SECRET_KEY'),
+    'enableRateLimit': True
 })
-
-TG_TOKEN = '8588741495:AAEYDfLoXnJVFbtMEdyjdNrZznwdSdJs0WQ'
-TG_ID = '5429169001'
-
-def log_to_db(query, params):
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
-        conn.close()
-    except Exception as e: print(f"DB Error: {e}")
 
 def calculate_rsi(symbol):
     try:
@@ -47,51 +29,32 @@ def calculate_rsi(symbol):
         return 100 - (100 / (1 + rs)).iloc[-1]
     except: return 50
 
-def monitor_trades():
-    while True:
-        try:
-            conn = mysql.connector.connect(**DB_CONFIG)
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM trades WHERE status = 'OPEN'")
-            for trade in cursor.fetchall():
-                ticker = exchange.fetch_ticker(trade['symbol'])
-                price = ticker['last']
-                change = ((price - trade['buy_price']) / trade['buy_price']) * 100
-                
-                # جني أرباح 10% أو وقف خسارة 5%
-                if change >= 10.0 or change <= -5.0:
-                    balance = exchange.fetch_balance()
-                    amt = balance.get(trade['symbol'].split('/')[0], {}).get('free', 0)
-                    if amt > 0:
-                        exchange.create_market_sell_order(trade['symbol'], amt)
-                        log_to_db("UPDATE trades SET sell_price=%s, status='CLOSED', profit_pct=%s WHERE id=%s", (price, change, trade['id']))
-                        requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={"chat_id": TG_ID, "text": f"✅ تم البيع: {trade['symbol']} بربح/خسارة {change:.2f}%"})
-            conn.close()
-        except: pass
-        time.sleep(30)
-
 def trading_engine():
-    blacklist = ['WAVES/USDT', 'XMR/USDT', 'ANT/USDT', 'FUN/USDT', 'REN/USDT']
     while True:
         try:
             balance = exchange.fetch_balance()
-            if float(balance.get('USDT', {}).get('free', 0)) >= 30.5:
+            usdt_free = float(balance.get('USDT', {}).get('free', 0))
+            
+            # الشراء بحد أدنى 11 وحد أقصى 30
+            if usdt_free >= 11.0:
+                buy_amt = round(random.uniform(11.0, min(30.0, usdt_free)), 2)
                 tickers = exchange.fetch_tickers()
                 for sym, t in tickers.items():
-                    if '/USDT' in sym and sym not in blacklist:
-                        rsi = calculate_rsi(sym)
-                        if t['percentage'] > 5.0 and rsi < 70:
-                            exchange.create_market_buy_order(sym, 30)
-                            log_to_db("INSERT INTO trades (symbol, buy_price, amount, rsi_at_buy) VALUES (%s, %s, %s, %s)", (sym, t['last'], 30, rsi))
-                            break
-        except: pass
+                    if '/USDT' in sym and t['percentage'] > 5.0 and calculate_rsi(sym) < 70:
+                        exchange.create_market_buy_order(sym, buy_amt)
+                        conn = mysql.connector.connect(**DB_CONFIG)
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT INTO trades (symbol, buy_price, amount_usdt) VALUES (%s, %s, %s)", (sym, t['last'], buy_amt))
+                        conn.commit()
+                        conn.close()
+                        break
+        except Exception as e: print(f"Error: {e}")
         time.sleep(60)
 
 threading.Thread(target=trading_engine, daemon=True).start()
-threading.Thread(target=monitor_trades, daemon=True).start()
 
 @app.route('/')
-def home(): return "<h1>رادار التكروري يعمل بنجاح</h1>"
+def home(): return "<h1>رادار التكروري: المحرك يعمل</h1>"
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
