@@ -55,12 +55,12 @@ def health_check():
             <h1 class="mb-4">🚀 رادار التكروري السحابي</h1>
             <div class="mb-3">
                 <span class="status-pulse"></span> 
-                <span style="color: #00ff41;">النظام يعمل بالـ Static IP</span>
+                <span style="color: #00ff41;">النظام يعمل بكفاءة بالـ Static IP</span>
             </div>
             <hr style="border-color: rgba(255,255,255,0.1);">
             <p class="lead">الرصيد المكتشف: <strong>41.14 USDT</strong></p>
             <p>وضع الاستراتيجية: <span class="badge bg-danger">مخاطرة 5%</span></p>
-            <p>فلتر العملات: <span class="badge bg-warning text-dark">تم تجاوز العملات المحذوفة</span></p>
+            <p>مبلغ الصفقة: <span class="badge bg-primary">15 USDT</span></p>
             <p class="mt-5 small text-muted">جميع الحقوق محفوظة © التكروري للبرمجيات 2026</p>
         </div>
     </body>
@@ -68,12 +68,12 @@ def health_check():
     """
 
 def trading_engine():
-    """المحرك الأساسي لقنص العملات المتاحة فعلياً في حسابك"""
-    # القائمة السوداء للعملات غير المتاحة في باينانس حالياً
+    """المحرك الأساسي لقنص العملات وتجاوز قيود باينانس"""
+    # القائمة السوداء للعملات غير المتاحة أو التي تسبب مشاكل
     blacklist = ['WAVES/USDT', 'XMR/USDT', 'ANT/USDT', 'MULTI/USDT', 'VAI/USDT'] 
     
-    print("🚀 انطلاق الرادار المطور لتجاوز العملات المغلقة..", flush=True)
-    send_telegram("🚀 <b>يا محمد، المحرك متصل الآن!</b>\nتم تفعيل القائمة السوداء لتجنب العملات المحذوفة والتركيز على SOL و XRP والعملات القوية.")
+    print("🚀 انطلاق الرادار المطور بمبلغ 15 USDT..", flush=True)
+    send_telegram("🚀 <b>يا محمد، المحرك متصل الآن!</b>\nتم رفع مبلغ الصفقة لـ 15 USDT لتجاوز قيود باينانس.")
     
     while True:
         try:
@@ -82,23 +82,22 @@ def trading_engine():
             usdt = float(balance.get('USDT', {}).get('free', 0))
             print(f"💰 الرصيد الحالي: {usdt:.2f} USDT", flush=True)
 
-            if usdt >= 11.5:
+            # نحتاج لـ 15.5 USDT على الأقل لتنفيذ الصفقة مع الرسوم
+            if usdt >= 15.5:
                 tickers = exchange.fetch_tickers()
                 for symbol, t in tickers.items():
-                    # التركيز فقط على أزواج USDT وتجاهل القائمة السوداء
                     if '/USDT' in symbol and symbol not in blacklist:
                         # شرط الصعود 5% لاقتناص العملات النشطة
                         if t['percentage'] and t['percentage'] > 5.0:
-                            print(f"🎯 فرصة في عملة متاحة: {symbol} (+{t['percentage']}%)", flush=True)
+                            print(f"🎯 فرصة مكتشفة: {symbol} (+{t['percentage']}%)")
                             
-                            # تنفيذ الشراء بـ 11 USDT
-                            exchange.create_market_buy_order(symbol, 11)
+                            # تنفيذ الشراء بـ 15 USDT لتجاوز خطأ NOTIONAL
+                            exchange.create_market_buy_order(symbol, 15)
                             
-                            send_telegram(f"🔔 <b>تم الشراء بنجاح!</b>\nالعملة: {symbol}\nالنسبة: {t['percentage']}%\nالمبلغ: 11 USDT")
+                            send_telegram(f"🔔 <b>تم الشراء بنجاح!</b>\nالعملة: {symbol}\nالنسبة: {t['percentage']}%\nالمبلغ: 15 USDT")
                             break
             
         except Exception as e:
-            # طباعة التنبيهات لمراقبة حالة السوق
             print(f"⚠️ تنبيه المحرك: {str(e)[:100]}", flush=True)
         
         # فحص كل دقيقة
@@ -108,6 +107,5 @@ def trading_engine():
 threading.Thread(target=trading_engine, daemon=True).start()
 
 if __name__ == '__main__':
-    # المنفذ 8080 المطلوب من قبل DigitalOcean
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
