@@ -37,7 +37,33 @@ def send_telegram(msg):
 @app.route('/')
 def health_check():
     """تأكيد عمل السيرفر تقنياً"""
-    return "✅ رادار التكروري يعمل (وضع المخاطرة: 3% - تجاوز WAVES)"
+@app.route('/')
+def health_check():
+    # تصميم احترافي باستخدام Bootstrap لشركة التكروري للبرمجيات
+    return """
+    <html>
+    <head>
+        <title>رادار التكروري السحابي</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body { background-color: #1a1a2e; color: white; text-align: center; padding-top: 50px; font-family: 'Arial', sans-serif; }
+            .card { background-color: #16213e; border: 1px solid #0f3460; border-radius: 15px; margin: 20px auto; max-width: 500px; padding: 20px; box-shadow: 0px 10px 30px rgba(0,0,0,0.5); }
+            .status-ok { color: #00ff41; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2 class="mb-4">🚀 رادار التكروري السحابي</h2>
+            <hr>
+            <p>الحالة الآن: <span class="status-ok">متصل ويعمل</span></p>
+            <p>وضع المخاطرة: <strong>3%</strong> | تم تجاوز <strong>WAVES</strong></p>
+            <div class="mt-4">
+                <small class="text-muted">تم التطوير بواسطة التكروري للبرمجيات © 2026</small>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
 def trading_engine():
     """المحرك المطور للمخاطرة وتجاوز العملات المغلقة"""
