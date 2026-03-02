@@ -1,81 +1,113 @@
+# db.py
 import os
 import sqlite3
-from contextlib import contextmanager
+from datetime import datetime
 
-DB_PATH = os.environ.get("DB_PATH", "data/app.db")
+DB_PATH = os.environ.get("DB_PATH", "bot.db")
 
-def ensure_dir():
-    d = os.path.dirname(DB_PATH)
-    if d and not os.path.exists(d):
-        os.makedirs(d, exist_ok=True)
-
-@contextmanager
-def get_conn():
-    ensure_dir()
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+def _conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def init_db():
-    with get_conn() as conn:
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS bot_status (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            mode TEXT,
-            is_running INTEGER,
-            updated_at TEXT,
-            usdt_free REAL,
-            last_price REAL,
-            last_error TEXT,
-            notes TEXT
-        )
-        """)
-        # Ensure row exists
-        row = conn.execute("SELECT id FROM bot_status WHERE id=1").fetchone()
-        if row is None:
-            conn.execute("""
-            INSERT INTO bot_status (id, mode, is_running, updated_at, usdt_free, last_price, last_error, notes)
-            VALUES (1, 'paper', 0, '', 0, 0, '', '')
-            """)
+    con = _conn()
+    cur = con.cursor()
 
-def set_status(
-    mode=None,
-    is_running=None,
-    updated_at=None,
-    usdt_free=None,
-    last_price=None,
-    last_error=None,
-    notes=None
-):
-    init_db()
-    fields = []
-    vals = []
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS bot_status (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        mode TEXT,
+        now_iso TEXT,
+        usdt_free REAL,
+        last_price REAL,
+        last_error TEXT,
+        notes TEXT
+    )
+    """)
+    cur.execute("INSERT OR IGNORE INTO bot_status (id, mode, now_iso, usdt_free, last_price, last_error, notes) VALUES (1,'paper','','',0,'','')")
 
-    def add(field, value):
-        fields.append(f"{field}=?")
-        vals.append(value)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS position (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        symbol TEXT,
+        side TEXT,
+        qty REAL,
+        entry_price REAL,
+        entry_time TEXT,
+        is_open INTEGER
+    )
+    """)
+    cur.execute("INSERT OR IGNORE INTO position (id, symbol, side, qty, entry_price, entry_time, is_open) VALUES (1,'','',0,0,'',0)")
 
-    if mode is not None: add("mode", mode)
-    if is_running is not None: add("is_running", 1 if is_running else 0)
-    if updated_at is not None: add("updated_at", updated_at)
-    if usdt_free is not None: add("usdt_free", float(usdt_free))
-    if last_price is not None: add("last_price", float(last_price))
-    if last_error is not None: add("last_error", str(last_error)[:4000])
-    if notes is not None: add("notes", str(notes)[:4000])
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT,
+        action TEXT,
+        qty REAL,
+        price REAL,
+        time TEXT,
+        note TEXT
+    )
+    """)
 
-    if not fields:
-        return
+    con.commit()
+    con.close()
 
-    sql = f"UPDATE bot_status SET {', '.join(fields)} WHERE id=1"
-    with get_conn() as conn:
-        conn.execute(sql, vals)
+def set_status(mode, usdt_free, last_price, last_error="", notes=""):
+    con = _conn()
+    cur = con.cursor()
+    cur.execute("""
+        UPDATE bot_status
+        SET mode=?, now_iso=?, usdt_free=?, last_price=?, last_error=?, notes=?
+        WHERE id=1
+    """, (mode, datetime.utcnow().isoformat(), float(usdt_free), float(last_price), str(last_error)[:500], str(notes)[:500]))
+    con.commit()
+    con.close()
 
-def get_status():
-    init_db()
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM bot_status WHERE id=1").fetchone()
-        return dict(row) if row else {}
+def get_position():
+    con = _conn()
+    cur = con.cursor()
+    row = cur.execute("SELECT symbol, side, qty, entry_price, entry_time, is_open FROM position WHERE id=1").fetchone()
+    con.close()
+    if not row:
+        return {"is_open": 0}
+    return {
+        "symbol": row[0],
+        "side": row[1],
+        "qty": float(row[2]),
+        "entry_price": float(row[3]),
+        "entry_time": row[4],
+        "is_open": int(row[5]),
+    }
+
+def open_position(symbol, side, qty, entry_price):
+    con = _conn()
+    cur = con.cursor()
+    cur.execute("""
+        UPDATE position
+        SET symbol=?, side=?, qty=?, entry_price=?, entry_time=?, is_open=1
+        WHERE id=1
+    """, (symbol, side, float(qty), float(entry_price), datetime.utcnow().isoformat()))
+    con.commit()
+    con.close()
+
+def close_position():
+    con = _conn()
+    cur = con.cursor()
+    cur.execute("""
+        UPDATE position
+        SET is_open=0
+        WHERE id=1
+    """)
+    con.commit()
+    con.close()
+
+def add_trade(symbol, action, qty, price, note=""):
+    con = _conn()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO trades(symbol, action, qty, price, time, note)
+        VALUES (?,?,?,?,?,?)
+    """, (symbol, action, float(qty), float(price), datetime.utcnow().isoformat(), str(note)[:500]))
+    con.commit()
+    con.close()
