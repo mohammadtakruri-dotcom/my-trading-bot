@@ -1,6 +1,5 @@
+flask
+gunicorn
 ccxt
 requests
-flask
-pandas
 mysql-connector-python
-gunicorn
