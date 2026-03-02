@@ -1,53 +1,38 @@
-# web_app.py
 import os
-from flask import Flask, render_template, jsonify
-from db import conn, init_db, now_iso
+from flask import Flask, render_template
+from db import init_db, get_status, list_trades
 
 app = Flask(__name__)
-init_db()
 
-@app.route("/")
-def dashboard():
-    c = conn()
-    cur = c.cursor(dictionary=True)
+@app.before_first_request
+def _init():
+    init_db()
 
-    cur.execute("SELECT * FROM bot_status WHERE id=1")
-    status = cur.fetchone() or {}
-
-    cur.execute("SELECT * FROM trades WHERE status='OPEN' ORDER BY id DESC LIMIT 100")
-    open_trades = cur.fetchall()
-
-    cur.execute("SELECT * FROM trades WHERE status='CLOSED' ORDER BY id DESC LIMIT 100")
-    closed_trades = cur.fetchall()
-
-    c.close()
-    return render_template("dashboard.html",
-                           status=status,
-                           open_trades=open_trades,
-                           closed_trades=closed_trades,
-                           now=now_iso())
-
-@app.route("/api/status")
-def api_status():
-    c = conn()
-    cur = c.cursor(dictionary=True)
-    cur.execute("SELECT * FROM bot_status WHERE id=1")
-    row = cur.fetchone()
-    c.close()
-    return jsonify(row or {})
-
-@app.route("/api/trades/open")
-def api_trades_open():
-    c = conn()
-    cur = c.cursor(dictionary=True)
-    cur.execute("SELECT * FROM trades WHERE status='OPEN' ORDER BY id DESC LIMIT 200")
-    rows = cur.fetchall()
-    c.close()
-    return jsonify(rows)
-
-@app.route("/health")
+@app.get("/health")
 def health():
-    return {"status": "ok", "time": now_iso()}
+    return {"ok": True}
+
+@app.get("/")
+def dashboard():
+    status = get_status()
+    open_trades = list_trades(status="OPEN", limit=100)
+    closed_trades = list_trades(status="CLOSED", limit=100)
+
+    # إحصائيات بسيطة
+    total_pnl = sum(float(t.get("pnl_usdt") or 0.0) for t in closed_trades)
+    wins = sum(1 for t in closed_trades if float(t.get("pnl_usdt") or 0.0) > 0)
+    losses = sum(1 for t in closed_trades if float(t.get("pnl_usdt") or 0.0) < 0)
+
+    return render_template(
+        "dashboard.html",
+        status=status,
+        open_trades=open_trades,
+        closed_trades=closed_trades,
+        total_pnl=total_pnl,
+        wins=wins,
+        losses=losses,
+        app_name=os.getenv("APP_NAME", "Takruri Trading Bot")
+    )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
