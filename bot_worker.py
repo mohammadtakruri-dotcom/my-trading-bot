@@ -1,3 +1,4 @@
+print("🚀 BOT WORKER STARTED")
 import os, time, random, requests
 import ccxt
 from db import init_db, set_status, open_symbols, insert_open_trade, close_trade, list_trades
