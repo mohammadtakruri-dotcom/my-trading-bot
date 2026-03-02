@@ -14,7 +14,7 @@ from db import init_db, set_status
 SYMBOL = os.environ.get("SYMBOL", "BTCUSDT").upper()
 
 MODE = os.environ.get("MODE", "paper").lower()  # paper / live
-LIVE_TRADING = os.environ.get("LIVE_TRADING", "NO").upper()  # YES to allow real orders
+LIVE_TRADING = os.environ.get("LIVE_TRADING", "YES").upper()  # YES to allow real orders
 
 BUY_USDT = float(os.environ.get("BUY_USDT", "5.0"))          # كم USDT تشتري به
 TP_PCT = float(os.environ.get("TP_PCT", "0.7"))              # Take profit %
