@@ -1,91 +1,60 @@
 <!doctype html>
-<html lang="ar" dir="rtl">
+<html>
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8">
   <title>Trading Bot Dashboard</title>
   <style>
-    body{font-family:Tahoma,Arial; margin:24px; background:#f7f7fb}
-    .card{background:#fff; border:1px solid #e6e6ef; border-radius:12px; padding:16px; max-width:820px}
-    .row{display:flex; gap:12px; flex-wrap:wrap}
-    .box{flex:1; min-width:240px; border:1px solid #eee; border-radius:10px; padding:12px}
-    .muted{color:#666}
-    .bad{color:#b00020}
-    .ok{color:#0b7a28}
-    code{background:#f1f1f7; padding:2px 6px; border-radius:6px}
+    body { font-family: Arial; margin: 24px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; }
+    .ok { color: green; }
+    .bad { color: #b00020; }
   </style>
 </head>
 <body>
+  <h2>Trading Bot Dashboard</h2>
+
   <div class="card">
-    <h2>لوحة متابعة البوت</h2>
-    <p class="muted">تحديث مباشر من قاعدة بيانات SQLite داخل التطبيق</p>
-
-    <div class="row">
-      <div class="box">
-        <b>الوضع</b><br/>
-        <span id="mode">{{ s.get('mode','') }}</span>
-      </div>
-      <div class="box">
-        <b>الرمز</b><br/>
-        <span id="symbol">{{ s.get('symbol','') }}</span>
-      </div>
-      <div class="box">
-        <b>آخر سعر</b><br/>
-        <span id="last_price">{{ s.get('last_price','') }}</span>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:12px">
-      <div class="box">
-        <b>USDT Free</b><br/>
-        <span id="usdt_free">{{ s.get('usdt_free','') }}</span>
-      </div>
-      <div class="box">
-        <b>Asset Free</b><br/>
-        <span id="asset_free">{{ s.get('asset_free','') }}</span>
-      </div>
-      <div class="box">
-        <b>In Position</b><br/>
-        <span id="in_position">{{ s.get('in_position','') }}</span>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:12px">
-      <div class="box">
-        <b>Entry</b><br/>
-        <span id="entry_price">{{ s.get('entry_price','') }}</span>
-      </div>
-      <div class="box">
-        <b>TP / SL</b><br/>
-        TP: <span id="tp_price">{{ s.get('tp_price','') }}</span><br/>
-        SL: <span id="sl_price">{{ s.get('sl_price','') }}</span>
-      </div>
-      <div class="box">
-        <b>آخر عملية</b><br/>
-        <span id="last_action">{{ s.get('last_action','') }}</span>
-      </div>
-    </div>
-
-    <div class="box" style="margin-top:12px">
-      <b>آخر خطأ</b><br/>
-      <span id="last_error" class="bad">{{ s.get('last_error','') }}</span>
-    </div>
-
-    <p class="muted" style="margin-top:12px">
-      API: <code>/api/status</code> — Health: <code>/health</code>
-    </p>
+    <h3>Status</h3>
+    <p><b>Mode:</b> {{ st.mode }}</p>
+    <p><b>Symbol:</b> {{ st.symbol }}</p>
+    <p><b>Price:</b> {{ st.price }}</p>
+    <p><b>PNL%:</b> {{ st.pnl }}</p>
+    <p><b>Position Qty:</b> {{ st.position_qty }}</p>
+    <p><b>Entry:</b> {{ st.position_entry }}</p>
+    <p><b>Last Action:</b> {{ st.last_action }}</p>
+    <p><b>Last Error:</b> <span class="{{ 'bad' if st.last_error else 'ok' }}">{{ st.last_error or 'None' }}</span></p>
+    <p><b>Heartbeat:</b> {{ st.last_heartbeat }}</p>
   </div>
 
-<script>
-async function refresh(){
-  const r = await fetch('/api/status');
-  const s = await r.json();
-  for (const k in s){
-    const el = document.getElementById(k);
-    if(el) el.textContent = s[k] === null ? '' : s[k];
-  }
-}
-setInterval(refresh, 3000);
-</script>
+  <div class="card">
+    <h3>Recent Trades</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Time (unix)</th>
+          <th>Symbol</th>
+          <th>Side</th>
+          <th>Qty</th>
+          <th>Price</th>
+          <th>Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in trades %}
+        <tr>
+          <td>{{ t.ts }}</td>
+          <td>{{ t.symbol }}</td>
+          <td>{{ t.side }}</td>
+          <td>{{ t.qty }}</td>
+          <td>{{ t.price }}</td>
+          <td>{{ t.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
 </body>
 </html>
