@@ -1,210 +1,111 @@
 import os
 import time
-import math
-from datetime import datetime, timezone
-
+from datetime import datetime
+import requests
 from binance.client import Client
-from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
-from binance.exceptions import BinanceAPIException
+from binance.enums import SIDE_SELL, ORDER_TYPE_MARKET
 from binance.helpers import round_step_size
 
-
-# =========================
-# Config (ENV)
-# =========================
-MODE = os.getenv("MODE", "paper").strip().lower()         # paper | live
-SYMBOLS = [s.strip().upper() for s in os.getenv("SYMBOLS", "BTCUSDT,ETHFIUSDT").split(",") if s.strip()]
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "2.0"))   # sell when profit >= this %
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0"))         # sell when loss >= this % (0 disables)
-MIN_USDT_POSITION = float(os.getenv("MIN_USDT_POSITION", "5")) # ignore tiny holdings under this USDT value
+# =======================
+# ENV
+# =======================
+MODE = os.getenv("MODE", "paper")
+SYMBOLS = os.getenv("SYMBOLS", "BTCUSDT,ETHFIUSDT").split(",")
+TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "3"))
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0"))
+MIN_USDT_POSITION = float(os.getenv("MIN_USDT_POSITION", "5"))
 SLEEP_SEC = int(os.getenv("SLEEP_SEC", "20"))
 
-API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
-API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
+API_KEY = os.getenv("BINANCE_API_KEY")
+API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-if not API_KEY or not API_SECRET:
-    raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_ID = os.getenv("TG_ID")
 
 client = Client(API_KEY, API_SECRET)
 
+# =======================
+# Telegram
+# =======================
+def send_telegram(msg):
+    if not TG_TOKEN or not TG_ID:
+        return
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": TG_ID, "text": msg})
 
-def now_iso():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+# =======================
+def get_price(symbol):
+    return float(client.get_symbol_ticker(symbol=symbol)["price"])
 
+def get_balance(asset):
+    bal = client.get_asset_balance(asset=asset)
+    return float(bal["free"]) if bal else 0
 
-def base_asset(symbol: str) -> str:
-    # assumes quote is USDT
-    if symbol.endswith("USDT"):
-        return symbol[:-4]
-    # fallback (not perfect)
-    return symbol[:-3]
+def base_asset(symbol):
+    return symbol.replace("USDT","")
 
-
-def get_symbol_filters(symbol: str):
+def get_step(symbol):
     info = client.get_symbol_info(symbol)
-    if not info:
-        raise RuntimeError(f"Symbol not found: {symbol}")
+    lot = next(f for f in info["filters"] if f["filterType"] == "LOT_SIZE")
+    return float(lot["stepSize"])
 
-    lot = next((f for f in info["filters"] if f["filterType"] == "LOT_SIZE"), None)
-    min_notional = next((f for f in info["filters"] if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL")), None)
-
-    step_size = float(lot["stepSize"]) if lot else 0.0
-    min_qty = float(lot["minQty"]) if lot else 0.0
-    min_notional_val = float(min_notional.get("minNotional", 0.0)) if min_notional else 0.0
-
-    return step_size, min_qty, min_notional_val
-
-
-def get_price(symbol: str) -> float:
-    t = client.get_symbol_ticker(symbol=symbol)
-    return float(t["price"])
-
-
-def safe_qty(symbol: str, qty: float) -> float:
-    step, min_qty, _ = get_symbol_filters(symbol)
-    if step > 0:
-        qty = float(round_step_size(qty, step))
-    # floor small rounding noise
-    qty = float(max(0.0, qty))
-    if qty < min_qty:
-        return 0.0
-    return qty
-
-
-def position_value_usdt(symbol: str, qty: float, price: float) -> float:
-    return qty * price
-
-
-def get_free_balance(asset: str) -> float:
-    b = client.get_asset_balance(asset=asset)
-    if not b:
-        return 0.0
-    return float(b["free"])
-
-
-def avg_entry_from_trades(symbol: str, lookback: int = 50):
-    """
-    Try to compute average entry price from recent BUY trades.
-    Works for manual buys too, as long as the API key can read trade history.
-    """
-    try:
-        trades = client.get_my_trades(symbol=symbol, limit=lookback)
-        buys = [t for t in trades if t.get("isBuyer") is True]
-        if not buys:
-            return None
-        # weighted average by qty
-        total_qty = 0.0
-        total_cost = 0.0
-        for t in buys[-lookback:]:
-            qty = float(t["qty"])
-            price = float(t["price"])
-            total_qty += qty
-            total_cost += qty * price
-        if total_qty <= 0:
-            return None
-        return total_cost / total_qty
-    except Exception:
-        return None
-
-
-# in-memory entry snapshot (fallback if no trade history)
-ENTRY_SNAPSHOT = {}
-
-
-def get_entry_price(symbol: str, current_price: float) -> float:
-    """
-    Priority:
-    1) average entry from trades (best)
-    2) snapshot from when bot first saw this holding
-    """
-    e = avg_entry_from_trades(symbol)
-    if e:
-        return float(e)
-
-    if symbol not in ENTRY_SNAPSHOT:
-        ENTRY_SNAPSHOT[symbol] = float(current_price)
-    return float(ENTRY_SNAPSHOT[symbol])
-
-
-def market_sell(symbol: str, qty: float):
+def sell_market(symbol, qty):
     if MODE != "live":
-        print(f"🟡 PAPER SELL (no real order) | {symbol} qty={qty}")
-        return {"paper": True}
+        send_telegram(f"🟡 PAPER SELL {symbol} qty={qty}")
+        return
+    client.create_order(
+        symbol=symbol,
+        side=SIDE_SELL,
+        type=ORDER_TYPE_MARKET,
+        quantity=qty
+    )
+    send_telegram(f"🔴 SOLD {symbol} qty={qty}")
 
+# =======================
+ENTRY = {}
+
+print("🚀 BOT STARTED")
+send_telegram("🤖 Bot Started")
+
+while True:
     try:
-        order = client.create_order(
-            symbol=symbol,
-            side=SIDE_SELL,
-            type=ORDER_TYPE_MARKET,
-            quantity=qty,
-        )
-        return order
-    except BinanceAPIException as e:
-        raise
+        for symbol in SYMBOLS:
+            symbol = symbol.strip().upper()
+            price = get_price(symbol)
+            asset = base_asset(symbol)
+            qty = get_balance(asset)
 
+            if qty <= 0:
+                continue
 
-def manage_symbol(symbol: str):
-    price = get_price(symbol)
-    base = base_asset(symbol)
-    qty = get_free_balance(base)
-    qty = safe_qty(symbol, qty)
+            value = qty * price
+            if value < MIN_USDT_POSITION:
+                continue
 
-    if qty <= 0:
-        # no holding -> nothing to sell/manage
-        return
+            if symbol not in ENTRY:
+                ENTRY[symbol] = price
+                send_telegram(f"📌 Tracking {symbol} at {price}")
 
-    pos_usdt = position_value_usdt(symbol, qty, price)
-    if pos_usdt < MIN_USDT_POSITION:
-        # ignore tiny dust
-        return
+            entry = ENTRY[symbol]
+            pnl = ((price - entry) / entry) * 100
 
-    entry = get_entry_price(symbol, price)
-    pnl_pct = ((price - entry) / entry) * 100.0 if entry > 0 else 0.0
+            print(f"{symbol} price={price} pnl={pnl:.2f}%")
 
-    status = f"⏳ alive | {symbol} | mode={MODE} | qty={qty} | entry={entry:.6f} | price={price:.6f} | pnl={pnl_pct:.2f}% | value≈{pos_usdt:.2f} USDT"
-    print(status)
+            if pnl >= TAKE_PROFIT_PCT:
+                step = get_step(symbol)
+                qty = round_step_size(qty, step)
+                sell_market(symbol, qty)
+                ENTRY.pop(symbol, None)
 
-    # TP
-    if pnl_pct >= TAKE_PROFIT_PCT:
-        print(f"✅ TAKE PROFIT hit | {symbol} pnl={pnl_pct:.2f}% >= {TAKE_PROFIT_PCT}% -> SELL")
-        try:
-            res = market_sell(symbol, qty)
-            print(f"✅ SELL DONE | {symbol} qty={qty} | res={('paper' if MODE!='live' else 'live')}")
-        except BinanceAPIException as e:
-            print(f"❌ Binance API Error on SELL | {symbol} | {e}")
-        return
-
-    # SL
-    if STOP_LOSS_PCT > 0 and pnl_pct <= -abs(STOP_LOSS_PCT):
-        print(f"🛑 STOP LOSS hit | {symbol} pnl={pnl_pct:.2f}% <= -{STOP_LOSS_PCT}% -> SELL")
-        try:
-            res = market_sell(symbol, qty)
-            print(f"🛑 SELL DONE | {symbol} qty={qty} | res={('paper' if MODE!='live' else 'live')}")
-        except BinanceAPIException as e:
-            print(f"❌ Binance API Error on SELL | {symbol} | {e}")
-        return
-
-
-def main():
-    print("🚀 BOT WORKER STARTED")
-    print(f"🧩 symbols={SYMBOLS} | mode={MODE} | TP={TAKE_PROFIT_PCT}% | SL={STOP_LOSS_PCT}% | MIN_USDT_POSITION={MIN_USDT_POSITION}")
-
-    while True:
-        try:
-            for sym in SYMBOLS:
-                try:
-                    manage_symbol(sym)
-                except BinanceAPIException as e:
-                    # common errors: invalid API key, IP restriction, permissions
-                    print(f"❌ Binance API Error | {sym} | {e}")
-                except Exception as e:
-                    print(f"❌ Error | {sym} | {e}")
-
-        except Exception as e:
-            print(f"❌ Loop error: {e}")
+            if STOP_LOSS_PCT > 0 and pnl <= -STOP_LOSS_PCT:
+                step = get_step(symbol)
+                qty = round_step_size(qty, step)
+                sell_market(symbol, qty)
+                ENTRY.pop(symbol, None)
 
         time.sleep(SLEEP_SEC)
 
-
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        print("Error:", e)
+        send_telegram(f"❌ Error: {e}")
+        time.sleep(10)
