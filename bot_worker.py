@@ -1,189 +1,236 @@
-# bot_worker.py
-import os, time, requests
+import os, time, math, random, requests
 import ccxt
-from db import conn, init_db, now_iso
+from db import init_db, set_status, open_symbols, insert_open_trade, close_trade
 
-MODE = os.getenv("MODE", "paper").lower()          # paper | live
+# ====== إعدادات أساسية ======
+MODE = os.getenv("MODE", "paper").lower()   # paper / live
 BUY_USDT = float(os.getenv("BUY_USDT", "15"))
-MIN_USDT_FREE = float(os.getenv("MIN_USDT_FREE", "15"))
-LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "60"))
-PCT_MIN = float(os.getenv("PCT_MIN", "5"))
-MIN_USDT_VALUE = float(os.getenv("MIN_USDT_VALUE", "10"))
+MIN_HOLD_USD = float(os.getenv("MIN_HOLD_USD", "10"))  # مزامنة العملات أكبر من هذا
+TP_PCT = float(os.getenv("TP_PCT", "0.10"))            # 10% هدف
+SL_PCT = float(os.getenv("SL_PCT", "0.05"))            # 5% وقف
+SLEEP_SEC = int(os.getenv("SLEEP_SEC", "60"))
 
-TG_TOKEN = os.getenv("TG_TOKEN")
-TG_ID = os.getenv("TG_ID")
+TG_TOKEN = os.getenv("TG_TOKEN", "")
+TG_ID = os.getenv("TG_ID", "")
 
-exchange = ccxt.binance({
-    "apiKey": os.getenv("BINANCE_API_KEY"),
-    "secret": os.getenv("BINANCE_SECRET_KEY"),
-    "enableRateLimit": True,
-    "options": {"defaultType": "spot"},
-})
+# أمان: لا تسمح بالـ live إذا لم تكن المفاتيح موجودة
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
 
 def send_telegram(msg: str):
     if not TG_TOKEN or not TG_ID:
         return
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TG_ID, "text": msg}, timeout=8)
+        requests.post(url, data={"chat_id": TG_ID, "text": msg}, timeout=5)
     except:
         pass
 
-def set_status(usdt_free=None, last_error=None, notes=None):
-    c = conn()
-    cur = c.cursor()
-    cur.execute("""
-        UPDATE bot_status
-        SET mode=%s, last_run=%s,
-            usdt_free=COALESCE(%s, usdt_free),
-            last_error=COALESCE(%s, last_error),
-            notes=COALESCE(%s, notes)
-        WHERE id=1
-    """, (MODE, now_iso(), usdt_free, last_error, notes))
-    c.commit()
-    c.close()
+def make_exchange():
+    ex = ccxt.binance({
+        "apiKey": BINANCE_API_KEY,
+        "secret": BINANCE_SECRET_KEY,
+        "enableRateLimit": True,
+        "options": {"defaultType": "spot"}  # فقط Spot
+    })
+    return ex
 
-def get_open_symbols():
-    c = conn()
-    cur = c.cursor(dictionary=True)
-    cur.execute("SELECT symbol FROM trades WHERE status='OPEN'")
-    rows = cur.fetchall()
-    c.close()
-    return set(r["symbol"] for r in rows)
+def safe_float(x, default=0.0):
+    try:
+        return float(x)
+    except:
+        return default
 
-def insert_open_trade(symbol, buy_price, buy_qty, buy_usdt, buy_order_id=None):
-    c = conn()
-    cur = c.cursor()
-    cur.execute("""
-        INSERT INTO trades(symbol,status,buy_price,buy_qty,buy_usdt,buy_order_id,buy_time)
-        VALUES(%s,'OPEN',%s,%s,%s,%s,%s)
-    """, (symbol, buy_price, buy_qty, buy_usdt, buy_order_id, now_iso()))
-    c.commit()
-    c.close()
+# ====== مؤشرات بسيطة (RSI) ======
+def rsi_from_closes(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    gains, losses = 0.0, 0.0
+    for i in range(-period, 0):
+        diff = closes[i] - closes[i-1]
+        if diff >= 0:
+            gains += diff
+        else:
+            losses += -diff
+    if losses == 0:
+        return 100.0
+    rs = gains / losses
+    return 100.0 - (100.0 / (1.0 + rs))
 
-def close_trade(symbol, sell_price, sell_qty, sell_order_id=None):
-    c = conn()
-    cur = c.cursor()
-    cur.execute("""
-        UPDATE trades
-        SET status='CLOSED', sell_price=%s, sell_qty=%s, sell_order_id=%s, sell_time=%s
-        WHERE symbol=%s AND status='OPEN'
-        ORDER BY id DESC
-        LIMIT 1
-    """, (sell_price, sell_qty, sell_order_id, now_iso(), symbol))
-    c.commit()
-    c.close()
+def fetch_rsi(exchange, symbol):
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe="5m", limit=60)
+    closes = [c[4] for c in ohlcv]
+    return rsi_from_closes(closes, 14)
 
-def last_price(symbol):
-    t = exchange.fetch_ticker(symbol)
-    return float(t["last"])
-
-def market_buy_by_usdt(symbol, usdt_amount):
-    if MODE == "paper":
-        p = last_price(symbol)
-        qty = usdt_amount / p
-        return {"id": None, "price": p, "qty": qty}
-
-    # شراء صحيح بقيمة USDT
-    order = exchange.create_market_buy_order(symbol, None, params={"quoteOrderQty": usdt_amount})
-    p = float(order.get("average") or last_price(symbol))
-    filled = float(order.get("filled") or 0.0)
-    return {"id": str(order.get("id")), "price": p, "qty": filled if filled > 0 else usdt_amount / p}
-
-def market_sell_qty(symbol, qty):
-    if MODE == "paper":
-        p = last_price(symbol)
-        return {"id": None, "price": p, "qty": qty}
-
-    order = exchange.create_market_sell_order(symbol, qty)
-    p = float(order.get("average") or last_price(symbol))
-    filled = float(order.get("filled") or qty)
-    return {"id": str(order.get("id")), "price": p, "qty": filled}
-
-def sync_wallet_to_db():
-    open_syms = get_open_symbols()
-    bal = exchange.fetch_balance()
-    totals = bal.get("total") or {}
-
-    for asset, total in totals.items():
-        if not total or float(total) <= 0:
+# ====== منطق اختيار عملة (بسيط وغير عدواني) ======
+def pick_symbol(exchange):
+    tickers = exchange.fetch_tickers()
+    candidates = []
+    for sym, t in tickers.items():
+        if not sym.endswith("/USDT"):
             continue
-        if asset in ("USDT", "BNB"):
+        if sym.startswith("USDC/") or sym.startswith("BUSD/"):
+            continue
+        pct = safe_float(t.get("percentage"))
+        last = safe_float(t.get("last"))
+        if last <= 0:
             continue
 
-        sym = f"{asset}/USDT"
-        if sym not in exchange.markets:
-            continue
+        # فلتر بسيط: حركة يومية بين 3% و 15% (فرص بدون جنون)
+        if 3.0 <= pct <= 15.0:
+            candidates.append(sym)
 
-        p = last_price(sym)
-        value = p * float(total)
-        if value >= MIN_USDT_VALUE and sym not in open_syms:
-            insert_open_trade(sym, buy_price=p, buy_qty=float(total), buy_usdt=value, buy_order_id="SYNC")
-            send_telegram(f"🧠 Sync: تم اكتشاف {sym} وإضافته للذاكرة. قيمة≈{value:.2f}$")
+    random.shuffle(candidates)
+    return candidates[:20]  # اختبر أول 20
 
-def engine_cycle():
-    open_syms = get_open_symbols()
+def qty_from_usdt(price, usdt):
+    if price <= 0:
+        return 0.0
+    return usdt / price
 
-    bal = exchange.fetch_balance()
-    usdt_free = float((bal.get("USDT") or {}).get("free") or 0.0)
-    set_status(usdt_free=usdt_free)
-
-    # شراء
-    if usdt_free >= MIN_USDT_FREE:
-        tickers = exchange.fetch_tickers()
-        candidates = []
-        for sym, t in tickers.items():
-            if "/USDT" not in sym:
+# ====== مزامنة “الذاكرة” من المحفظة ======
+def sync_from_wallet(exchange):
+    """إذا كان عندك عملات في المحفظة ولم تكن مسجلة كصفقات OPEN، سجّلها."""
+    try:
+        bal = exchange.fetch_balance()
+        totals = bal.get("total", {})
+        opens = open_symbols()
+        for asset, amount in totals.items():
+            amt = safe_float(amount)
+            if amt <= 0:
                 continue
-            if sym in open_syms:
+            if asset in ("USDT", "BNB"):
                 continue
-            pct = t.get("percentage")
-            last = t.get("last")
-            if pct is None or last is None:
+            sym = f"{asset}/USDT"
+            if sym in opens:
                 continue
-            if float(pct) >= PCT_MIN:
-                candidates.append((sym, float(pct), float(last)))
 
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        if candidates:
-            sym, pct, _ = candidates[0]
-            buy = market_buy_by_usdt(sym, BUY_USDT)
-            insert_open_trade(sym, buy_price=buy["price"], buy_qty=buy["qty"], buy_usdt=BUY_USDT, buy_order_id=buy["id"])
-            send_telegram(f"✅ شراء: {sym} | pct={pct:.2f}% | price≈{buy['price']:.6f}")
+            try:
+                ticker = exchange.fetch_ticker(sym)
+                last = safe_float(ticker.get("last"))
+                usd_val = last * amt
+                if usd_val >= MIN_HOLD_USD:
+                    # نضيفها كصفقة مفتوحة (بسعر تقريبي الحالي)
+                    insert_open_trade(sym, last, amt, usd_val, buy_order_id="SYNC")
+                    send_telegram(f"🧠 Sync: اكتشفت عملة في المحفظة وسجلتها OPEN: {sym} قيمة≈{usd_val:.2f} USDT")
+            except:
+                continue
+    except:
+        pass
 
-    # بيع (هدف 10% / ستوب 5%)
-    c = conn()
-    cur = c.cursor(dictionary=True)
-    cur.execute("SELECT * FROM trades WHERE status='OPEN'")
-    opens = cur.fetchall()
-    c.close()
-
-    for tr in opens:
-        sym = tr["symbol"]
-        buy_price = float(tr["buy_price"] or 0)
-        buy_qty = float(tr["buy_qty"] or 0)
-        if buy_price <= 0 or buy_qty <= 0:
+# ====== مراقبة TP/SL على الصفقات OPEN ======
+def monitor_positions(exchange):
+    from db import list_trades
+    open_trades = list_trades(status="OPEN", limit=500)
+    for t in open_trades:
+        sym = t["symbol"]
+        buy_price = safe_float(t.get("buy_price"))
+        qty = safe_float(t.get("buy_qty"))
+        if qty <= 0 or buy_price <= 0:
             continue
 
-        p = last_price(sym)
-        change = (p - buy_price) / buy_price * 100.0
-        if change >= 10.0 or change <= -5.0:
-            sell = market_sell_qty(sym, buy_qty)
-            close_trade(sym, sell_price=sell["price"], sell_qty=sell["qty"], sell_order_id=sell["id"])
-            send_telegram(f"📤 بيع: {sym} | change={change:.2f}% | sell≈{sell['price']:.6f}")
+        try:
+            last = safe_float(exchange.fetch_ticker(sym).get("last"))
+        except:
+            continue
+        if last <= 0:
+            continue
 
-def main():
+        tp = buy_price * (1 + TP_PCT)
+        sl = buy_price * (1 - SL_PCT)
+
+        if last >= tp or last <= sl:
+            # بيع (paper أو live)
+            if MODE == "live":
+                # Safety: لا تداول حقيقي إذا المفاتيح ناقصة
+                if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
+                    set_status(last_error="Live mode ولكن مفاتيح Binance غير موجودة", notes="أوقف البيع لحماية الحساب")
+                    continue
+                try:
+                    order = exchange.create_market_sell_order(sym, qty)
+                    oid = str(order.get("id"))
+                except Exception as e:
+                    set_status(last_error=f"Sell error: {e}")
+                    continue
+            else:
+                oid = "PAPER_SELL"
+
+            close_trade(sym, last, qty, sell_order_id=oid)
+            side = "TP ✅" if last >= tp else "SL 🛑"
+            send_telegram(f"📤 {side} بيع: {sym} بسعر {last:.6f} qty={qty}")
+    return
+
+def main_loop():
     init_db()
-    send_telegram(f"🚀 Worker started | MODE={MODE}")
+    send_telegram("🚀 Bot started (SQLite) | MODE=" + MODE)
+    exchange = make_exchange()
+
     while True:
         try:
-            set_status(last_error="", notes="running")
-            sync_wallet_to_db()
-            engine_cycle()
+            # تحديث حالة عامة
+            try:
+                bal = exchange.fetch_balance()
+                usdt_free = safe_float(bal.get("free", {}).get("USDT", 0))
+            except:
+                usdt_free = 0.0
+
+            set_status(mode=MODE, usdt_free=usdt_free, last_error="", notes="running")
+
+            # مزامنة من المحفظة (مهم لتفادي “نسيان” العملات)
+            sync_from_wallet(exchange)
+
+            # مراقبة TP/SL
+            monitor_positions(exchange)
+
+            # شراء (فقط إذا لا يوجد صفقات كثيرة مفتوحة)
+            opens = open_symbols()
+            if len(opens) >= 5:
+                time.sleep(SLEEP_SEC)
+                continue
+
+            if usdt_free >= BUY_USDT:
+                # اختر عملة + تأكد RSI منخفض (دخول محافظ)
+                for sym in pick_symbol(exchange):
+                    if sym in opens:
+                        continue
+
+                    try:
+                        rsi = fetch_rsi(exchange, sym)
+                        ticker = exchange.fetch_ticker(sym)
+                        last = safe_float(ticker.get("last"))
+                        if last <= 0:
+                            continue
+                    except:
+                        continue
+
+                    # شرط دخول بسيط: RSI <= 35 (يعني “هبوط نسبي”)
+                    if rsi is None or rsi > 35:
+                        continue
+
+                    qty = qty_from_usdt(last, BUY_USDT)
+                    if qty <= 0:
+                        continue
+
+                    if MODE == "live":
+                        if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
+                            set_status(last_error="Live mode ولكن مفاتيح Binance غير موجودة", notes="أوقف الشراء لحماية الحساب")
+                            break
+                        try:
+                            order = exchange.create_market_buy_order(sym, qty)
+                            oid = str(order.get("id"))
+                        except Exception as e:
+                            set_status(last_error=f"Buy error: {e}")
+                            continue
+                    else:
+                        oid = "PAPER_BUY"
+
+                    insert_open_trade(sym, last, qty, BUY_USDT, buy_order_id=oid)
+                    send_telegram(f"✅ شراء ({MODE}): {sym} @ {last:.6f} qty={qty:.6f} RSI={rsi:.1f}")
+                    break
+
         except Exception as e:
-            set_status(last_error=str(e), notes="error")
-            print("WORKER ERROR:", e)
-        time.sleep(LOOP_SECONDS)
+            set_status(last_error=str(e), notes="loop exception")
+        time.sleep(SLEEP_SEC)
 
 if __name__ == "__main__":
-    main()
+    main_loop()
