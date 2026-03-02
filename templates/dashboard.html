@@ -1,101 +1,113 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>لوحة روبوت التداول</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_name }}</title>
   <style>
-    body{font-family:Arial; background:#0b1220; color:#e7eefc; margin:20px;}
-    .card{background:#121b2e; border:1px solid #243252; padding:16px; border-radius:12px; margin-bottom:14px;}
-    table{width:100%; border-collapse:collapse; margin-top:10px;}
-    th,td{border-bottom:1px solid #243252; padding:10px; text-align:right; font-size:14px;}
-    th{color:#a9b9dd;}
-    .badge{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; border:1px solid #243252;}
-    .ok{color:#7CFFB2;}
-    .warn{color:#FFD37C;}
-    .err{color:#FF7C7C;}
-    .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:12px;}
-    @media (max-width:900px){.grid{grid-template-columns:1fr;}}
-    small{color:#9bb0d6;}
+    body{font-family:Arial, sans-serif; background:#0b1220; color:#e6eefc; margin:0}
+    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
+    .card{background:#101a2e;border:1px solid #1f2b44;border-radius:12px;padding:16px;margin-bottom:16px}
+    h1,h2{margin:0 0 12px 0}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+    .kpi{background:#0f1a31;border:1px solid #1f2b44;border-radius:12px;padding:12px}
+    .muted{color:#9fb2d7}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid #1f2b44;font-size:14px}
+    th{color:#bcd0ff;text-align:right;background:#0f1a31}
+    .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px}
+    .open{background:#143a22;color:#8dffb1}
+    .closed{background:#2a2a55;color:#b9c7ff}
+    .err{color:#ff9aa2}
   </style>
 </head>
 <body>
-
-  <h2>📊 لوحة تحكم روبوت التداول</h2>
-  <small>آخر تحديث: {{ now }}</small>
-
+<div class="wrap">
   <div class="card">
-    <div class="grid">
-      <div>
-        <div>الوضع</div>
-        <div class="badge">{{ status.mode or "?" }}</div>
-      </div>
-      <div>
-        <div>USDT Free</div>
-        <div class="badge ok">{{ "%.2f"|format(status.usdt_free or 0) }}</div>
-      </div>
-      <div>
-        <div>آخر تشغيل</div>
-        <div class="badge">{{ status.last_run or "-" }}</div>
-      </div>
-    </div>
-
-    <div style="margin-top:10px;">
-      <div>آخر خطأ</div>
-      {% if status.last_error %}
-        <div class="badge err">{{ status.last_error }}</div>
-      {% else %}
-        <div class="badge ok">لا يوجد ✅</div>
-      {% endif %}
-    </div>
+    <h1>{{ app_name }}</h1>
+    <div class="muted">الحالة العامة للبوت + الصفقات</div>
   </div>
 
   <div class="card">
-    <h3>🟢 الصفقات المفتوحة ({{ open_trades|length }})</h3>
+    <h2>الحالة</h2>
+    <div class="grid">
+      <div class="kpi">
+        <div class="muted">MODE</div>
+        <div style="font-size:18px">{{ status.mode or 'paper' }}</div>
+      </div>
+      <div class="kpi">
+        <div class="muted">USDT Free (آخر قراءة)</div>
+        <div style="font-size:18px">{{ "%.4f"|format(status.usdt_free or 0) }}</div>
+      </div>
+      <div class="kpi">
+        <div class="muted">آخر تشغيل</div>
+        <div style="font-size:14px">{{ status.last_run or '-' }}</div>
+      </div>
+      <div class="kpi">
+        <div class="muted">أرباح الصفقات المغلقة</div>
+        <div style="font-size:18px">{{ "%.4f"|format(total_pnl) }} USDT</div>
+        <div class="muted">Wins: {{ wins }} | Losses: {{ losses }}</div>
+      </div>
+    </div>
+    {% if status.last_error %}
+      <div style="margin-top:10px" class="err">آخر خطأ: {{ status.last_error }}</div>
+    {% endif %}
+    {% if status.notes %}
+      <div style="margin-top:8px" class="muted">ملاحظات: {{ status.notes }}</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>الصفقات المفتوحة</h2>
     <table>
       <thead>
         <tr>
-          <th>#</th><th>الرمز</th><th>سعر الشراء</th><th>الكمية</th><th>USDT</th><th>وقت الشراء</th><th>Order ID</th>
+          <th>ID</th><th>Symbol</th><th>Status</th><th>Buy Price</th><th>Qty</th><th>Buy USDT</th><th>Buy Time</th>
         </tr>
       </thead>
       <tbody>
-        {% for t in open_trades %}
+      {% for t in open_trades %}
         <tr>
           <td>{{ t.id }}</td>
           <td>{{ t.symbol }}</td>
+          <td><span class="pill open">OPEN</span></td>
           <td>{{ t.buy_price }}</td>
           <td>{{ t.buy_qty }}</td>
           <td>{{ t.buy_usdt }}</td>
           <td>{{ t.buy_time }}</td>
-          <td>{{ t.buy_order_id }}</td>
         </tr>
-        {% endfor %}
+      {% else %}
+        <tr><td colspan="7" class="muted">لا توجد صفقات مفتوحة.</td></tr>
+      {% endfor %}
       </tbody>
     </table>
   </div>
 
   <div class="card">
-    <h3>⚪ الصفقات المغلقة (آخر 100)</h3>
+    <h2>آخر الصفقات المغلقة</h2>
     <table>
       <thead>
         <tr>
-          <th>#</th><th>الرمز</th><th>شراء</th><th>بيع</th><th>كمية</th><th>وقت البيع</th>
+          <th>ID</th><th>Symbol</th><th>Status</th><th>Sell Price</th><th>Qty</th><th>PnL USDT</th><th>Sell Time</th>
         </tr>
       </thead>
       <tbody>
-        {% for t in closed_trades %}
+      {% for t in closed_trades %}
         <tr>
           <td>{{ t.id }}</td>
           <td>{{ t.symbol }}</td>
-          <td>{{ t.buy_price }}</td>
+          <td><span class="pill closed">CLOSED</span></td>
           <td>{{ t.sell_price }}</td>
           <td>{{ t.sell_qty }}</td>
+          <td>{{ "%.4f"|format(t.pnl_usdt or 0) }}</td>
           <td>{{ t.sell_time }}</td>
         </tr>
-        {% endfor %}
+      {% else %}
+        <tr><td colspan="7" class="muted">لا توجد صفقات مغلقة.</td></tr>
+      {% endfor %}
       </tbody>
     </table>
   </div>
-
+</div>
 </body>
 </html>
