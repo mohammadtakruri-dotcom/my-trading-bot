@@ -1,113 +1,64 @@
-# db.py
-import os
 import sqlite3
+import os
 from datetime import datetime
 
 DB_PATH = os.environ.get("DB_PATH", "bot.db")
 
-def _conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+def conn():
+    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
 
 def init_db():
-    con = _conn()
-    cur = con.cursor()
-
+    c = conn()
+    cur = c.cursor()
     cur.execute("""
     CREATE TABLE IF NOT EXISTS bot_status (
-        id INTEGER PRIMARY KEY CHECK (id=1),
+        id INTEGER PRIMARY KEY,
         mode TEXT,
-        now_iso TEXT,
-        usdt_free REAL,
+        symbol TEXT,
         last_price REAL,
-        last_error TEXT,
-        notes TEXT
-    )
-    """)
-    cur.execute("INSERT OR IGNORE INTO bot_status (id, mode, now_iso, usdt_free, last_price, last_error, notes) VALUES (1,'paper','','',0,'','')")
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS position (
-        id INTEGER PRIMARY KEY CHECK (id=1),
-        symbol TEXT,
-        side TEXT,
-        qty REAL,
+        usdt_free REAL,
+        asset_free REAL,
+        in_position INTEGER,
         entry_price REAL,
-        entry_time TEXT,
-        is_open INTEGER
+        tp_price REAL,
+        sl_price REAL,
+        last_action TEXT,
+        last_error TEXT,
+        notes TEXT,
+        updated_at TEXT
     )
     """)
-    cur.execute("INSERT OR IGNORE INTO position (id, symbol, side, qty, entry_price, entry_time, is_open) VALUES (1,'','',0,0,'',0)")
+    cur.execute("SELECT COUNT(*) AS n FROM bot_status WHERE id=1")
+    n = cur.fetchone()["n"]
+    if n == 0:
+        cur.execute("""
+            INSERT INTO bot_status
+            (id, mode, symbol, last_price, usdt_free, asset_free, in_position, entry_price, tp_price, sl_price,
+             last_action, last_error, notes, updated_at)
+            VALUES
+            (1, 'paper', 'BTCUSDT', 0, 0, 0, 0, NULL, NULL, NULL, 'init', NULL, '', ?)
+        """, (datetime.utcnow().isoformat(),))
+    c.commit()
+    c.close()
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS trades (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        symbol TEXT,
-        action TEXT,
-        qty REAL,
-        price REAL,
-        time TEXT,
-        note TEXT
-    )
-    """)
+def set_status(**kwargs):
+    keys = list(kwargs.keys())
+    if not keys:
+        return
+    c = conn()
+    cur = c.cursor()
+    fields = ", ".join([f"{k}=?" for k in keys] + ["updated_at=?"])
+    vals = [kwargs[k] for k in keys] + [datetime.utcnow().isoformat()]
+    cur.execute(f"UPDATE bot_status SET {fields} WHERE id=1", vals)
+    c.commit()
+    c.close()
 
-    con.commit()
-    con.close()
-
-def set_status(mode, usdt_free, last_price, last_error="", notes=""):
-    con = _conn()
-    cur = con.cursor()
-    cur.execute("""
-        UPDATE bot_status
-        SET mode=?, now_iso=?, usdt_free=?, last_price=?, last_error=?, notes=?
-        WHERE id=1
-    """, (mode, datetime.utcnow().isoformat(), float(usdt_free), float(last_price), str(last_error)[:500], str(notes)[:500]))
-    con.commit()
-    con.close()
-
-def get_position():
-    con = _conn()
-    cur = con.cursor()
-    row = cur.execute("SELECT symbol, side, qty, entry_price, entry_time, is_open FROM position WHERE id=1").fetchone()
-    con.close()
-    if not row:
-        return {"is_open": 0}
-    return {
-        "symbol": row[0],
-        "side": row[1],
-        "qty": float(row[2]),
-        "entry_price": float(row[3]),
-        "entry_time": row[4],
-        "is_open": int(row[5]),
-    }
-
-def open_position(symbol, side, qty, entry_price):
-    con = _conn()
-    cur = con.cursor()
-    cur.execute("""
-        UPDATE position
-        SET symbol=?, side=?, qty=?, entry_price=?, entry_time=?, is_open=1
-        WHERE id=1
-    """, (symbol, side, float(qty), float(entry_price), datetime.utcnow().isoformat()))
-    con.commit()
-    con.close()
-
-def close_position():
-    con = _conn()
-    cur = con.cursor()
-    cur.execute("""
-        UPDATE position
-        SET is_open=0
-        WHERE id=1
-    """)
-    con.commit()
-    con.close()
-
-def add_trade(symbol, action, qty, price, note=""):
-    con = _conn()
-    cur = con.cursor()
-    cur.execute("""
-        INSERT INTO trades(symbol, action, qty, price, time, note)
-        VALUES (?,?,?,?,?,?)
-    """, (symbol, action, float(qty), float(price), datetime.utcnow().isoformat(), str(note)[:500]))
-    con.commit()
-    con.close()
+def get_status():
+    c = conn()
+    cur = c.cursor()
+    cur.execute("SELECT * FROM bot_status WHERE id=1")
+    row = cur.fetchone()
+    c.close()
+    return dict(row) if row else None
