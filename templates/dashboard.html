@@ -2,112 +2,90 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>{{ app_name }}</title>
   <style>
-    body{font-family:Arial, sans-serif; background:#0b1220; color:#e6eefc; margin:0}
-    .wrap{max-width:1100px;margin:24px auto;padding:0 16px}
-    .card{background:#101a2e;border:1px solid #1f2b44;border-radius:12px;padding:16px;margin-bottom:16px}
-    h1,h2{margin:0 0 12px 0}
-    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-    .kpi{background:#0f1a31;border:1px solid #1f2b44;border-radius:12px;padding:12px}
-    .muted{color:#9fb2d7}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px;border-bottom:1px solid #1f2b44;font-size:14px}
-    th{color:#bcd0ff;text-align:right;background:#0f1a31}
-    .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px}
-    .open{background:#143a22;color:#8dffb1}
-    .closed{background:#2a2a55;color:#b9c7ff}
-    .err{color:#ff9aa2}
+    body{font-family:Arial, sans-serif; background:#0b1220; color:#e8eefc; margin:0; padding:20px;}
+    .card{background:#121b2e; border:1px solid #223255; border-radius:14px; padding:16px; max-width:900px; margin:auto;}
+    h1{margin:0 0 10px 0; font-size:22px;}
+    .grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px;}
+    .box{background:#0f1730; border:1px solid #223255; border-radius:12px; padding:12px;}
+    .label{opacity:.8; font-size:13px; margin-bottom:6px;}
+    .value{font-size:18px; font-weight:700;}
+    .pill{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:700;}
+    .ok{background:#0d3b25; color:#8ff3b8; border:1px solid #1f6b45;}
+    .bad{background:#3b0d0d; color:#ffb3b3; border:1px solid #7a1f1f;}
+    .muted{opacity:.8; font-size:13px;}
+    .row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+    pre{white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #223255; overflow:auto;}
+    a{color:#9ecbff}
   </style>
 </head>
 <body>
-<div class="wrap">
   <div class="card">
-    <h1>{{ app_name }}</h1>
-    <div class="muted">الحالة العامة للبوت + الصفقات</div>
-  </div>
-
-  <div class="card">
-    <h2>الحالة</h2>
-    <div class="grid">
-      <div class="kpi">
-        <div class="muted">MODE</div>
-        <div style="font-size:18px">{{ status.mode or 'paper' }}</div>
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <h1>لوحة التحكم — {{ app_name }}</h1>
+        <div class="muted">تحديث تلقائي كل 10 ثواني</div>
       </div>
-      <div class="kpi">
-        <div class="muted">USDT Free (آخر قراءة)</div>
-        <div style="font-size:18px">{{ "%.4f"|format(status.usdt_free or 0) }}</div>
-      </div>
-      <div class="kpi">
-        <div class="muted">آخر تشغيل</div>
-        <div style="font-size:14px">{{ status.last_run or '-' }}</div>
-      </div>
-      <div class="kpi">
-        <div class="muted">أرباح الصفقات المغلقة</div>
-        <div style="font-size:18px">{{ "%.4f"|format(total_pnl) }} USDT</div>
-        <div class="muted">Wins: {{ wins }} | Losses: {{ losses }}</div>
+      <div>
+        {% if status.get("is_running") %}
+          <span class="pill ok">RUNNING</span>
+        {% else %}
+          <span class="pill bad">STOPPED</span>
+        {% endif %}
       </div>
     </div>
-    {% if status.last_error %}
-      <div style="margin-top:10px" class="err">آخر خطأ: {{ status.last_error }}</div>
-    {% endif %}
-    {% if status.notes %}
-      <div style="margin-top:8px" class="muted">ملاحظات: {{ status.notes }}</div>
-    {% endif %}
+
+    <div class="grid">
+      <div class="box">
+        <div class="label">MODE</div>
+        <div class="value" id="mode">{{ status.get("mode","") }}</div>
+      </div>
+      <div class="box">
+        <div class="label">آخر تحديث</div>
+        <div class="value" id="updated_at">{{ status.get("updated_at","") }}</div>
+      </div>
+      <div class="box">
+        <div class="label">USDT Free</div>
+        <div class="value" id="usdt_free">{{ status.get("usdt_free",0) }}</div>
+      </div>
+      <div class="box">
+        <div class="label">BTC/USDT آخر سعر</div>
+        <div class="value" id="last_price">{{ status.get("last_price",0) }}</div>
+      </div>
+    </div>
+
+    <div class="box" style="margin-top:12px;">
+      <div class="label">ملاحظات</div>
+      <div class="value" id="notes" style="font-size:14px; font-weight:500;"></div>
+    </div>
+
+    <div class="box" style="margin-top:12px;">
+      <div class="label">آخر خطأ</div>
+      <pre id="last_error">{{ status.get("last_error","") }}</pre>
+    </div>
+
+    <div class="muted" style="margin-top:10px;">
+      API: <a href="/api/status" target="_blank">/api/status</a> — Health: <a href="/health" target="_blank">/health</a>
+    </div>
   </div>
 
-  <div class="card">
-    <h2>الصفقات المفتوحة</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th><th>Symbol</th><th>Status</th><th>Buy Price</th><th>Qty</th><th>Buy USDT</th><th>Buy Time</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for t in open_trades %}
-        <tr>
-          <td>{{ t.id }}</td>
-          <td>{{ t.symbol }}</td>
-          <td><span class="pill open">OPEN</span></td>
-          <td>{{ t.buy_price }}</td>
-          <td>{{ t.buy_qty }}</td>
-          <td>{{ t.buy_usdt }}</td>
-          <td>{{ t.buy_time }}</td>
-        </tr>
-      {% else %}
-        <tr><td colspan="7" class="muted">لا توجد صفقات مفتوحة.</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>آخر الصفقات المغلقة</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th><th>Symbol</th><th>Status</th><th>Sell Price</th><th>Qty</th><th>PnL USDT</th><th>Sell Time</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for t in closed_trades %}
-        <tr>
-          <td>{{ t.id }}</td>
-          <td>{{ t.symbol }}</td>
-          <td><span class="pill closed">CLOSED</span></td>
-          <td>{{ t.sell_price }}</td>
-          <td>{{ t.sell_qty }}</td>
-          <td>{{ "%.4f"|format(t.pnl_usdt or 0) }}</td>
-          <td>{{ t.sell_time }}</td>
-        </tr>
-      {% else %}
-        <tr><td colspan="7" class="muted">لا توجد صفقات مغلقة.</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
+<script>
+async function refresh(){
+  try{
+    const r = await fetch('/api/status', {cache:'no-store'});
+    const s = await r.json();
+    document.getElementById('mode').textContent = s.mode ?? '';
+    document.getElementById('updated_at').textContent = s.updated_at ?? '';
+    document.getElementById('usdt_free').textContent = s.usdt_free ?? 0;
+    document.getElementById('last_price').textContent = s.last_price ?? 0;
+    document.getElementById('last_error').textContent = s.last_error ?? '';
+    document.getElementById('notes').textContent = s.notes ?? '';
+  }catch(e){}
+}
+setInterval(refresh, 10000);
+refresh();
+</script>
 </body>
 </html>
