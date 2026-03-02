@@ -1,177 +1,140 @@
-print("🚀 BOT WORKER STARTED")
-import os, time, random, requests
-import ccxt
-from db import init_db, set_status, open_symbols, insert_open_trade, close_trade, list_trades
+import os
+import time
+import traceback
+from datetime import datetime, timezone
 
-MODE = os.getenv("MODE", "paper").lower()          # paper / live
-BUY_USDT = float(os.getenv("BUY_USDT", "15"))
-TP_PCT = float(os.getenv("TP_PCT", "0.10"))        # 10%
-SL_PCT = float(os.getenv("SL_PCT", "0.05"))        # 5%
-SLEEP_SEC = int(os.getenv("SLEEP_SEC", "60"))
-MIN_HOLD_USD = float(os.getenv("MIN_HOLD_USD", "10"))
+import requests
+from binance.client import Client
 
-TG_TOKEN = os.getenv("TG_TOKEN", "")
-TG_ID = os.getenv("TG_ID", "")
+from db import init_db, set_status
 
-API_KEY = os.getenv("BINANCE_API_KEY", "")
-SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def send_telegram(msg: str):
-    if not TG_TOKEN or not TG_ID:
+def get_env(name, default=None):
+    v = os.environ.get(name)
+    return v if v is not None and v != "" else default
+
+def tg_send(text: str):
+    token = get_env("TG_TOKEN")
+    chat_id = get_env("TG_ID")
+    if not token or not chat_id:
         return
     try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": TG_ID, "text": msg}, timeout=5)
-    except:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)
+    except Exception:
         pass
 
-def safe_float(x, default=0.0):
-    try:
-        return float(x)
-    except:
-        return default
+def get_price_btcusdt():
+    # بدون Binance lib حتى لو API keys ناقصة
+    r = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=15)
+    r.raise_for_status()
+    return float(r.json()["price"])
 
-def make_exchange():
-    return ccxt.binance({
-        "apiKey": API_KEY,
-        "secret": SECRET_KEY,
-        "enableRateLimit": True,
-        "options": {"defaultType": "spot"}
-    })
+def get_usdt_free_live(client: Client):
+    # يحتاج API Key/Secret وصلاحية Read
+    bal = client.get_asset_balance(asset="USDT")
+    if not bal:
+        return 0.0
+    return float(bal.get("free", 0) or 0)
 
-def qty_from_usdt(price, usdt):
-    return usdt / price if price > 0 else 0.0
+def maybe_place_buy_order(client: Client, usdt_amount: float):
+    """
+    ⚠️ تنفيذ فعلي فقط إذا ENABLE_TRADING=1
+    """
+    enable = get_env("ENABLE_TRADING", "0")
+    if enable != "1":
+        return "ENABLE_TRADING=0 (no real order placed)"
 
-def pick_symbols(exchange):
-    tickers = exchange.fetch_tickers()
-    cands = []
-    for sym, t in tickers.items():
-        if not sym.endswith("/USDT"):
-            continue
-        last = safe_float(t.get("last"))
-        pct = safe_float(t.get("percentage"))
-        if last <= 0:
-            continue
-        if 3.0 <= pct <= 15.0:
-            cands.append(sym)
-    random.shuffle(cands)
-    return cands[:20]
+    # مثال شراء Market بكمية USDT -> تحتاج حساب quantity بالـ BTC
+    price = get_price_btcusdt()
+    qty = usdt_amount / price
+    # تقريبي جداً — في الواقع لازم تطابق LOT_SIZE و MIN_NOTIONAL
+    qty = round(qty, 6)
 
-def sync_from_wallet(exchange):
-    """يسجل العملات الموجودة فعلياً في المحفظة إذا لم تكن مسجلة OPEN."""
-    try:
-        bal = exchange.fetch_balance()
-        totals = bal.get("total", {})
-        opens = open_symbols()
-        for asset, amount in totals.items():
-            amt = safe_float(amount)
-            if amt <= 0:
-                continue
-            if asset in ("USDT", "BNB"):
-                continue
-            sym = f"{asset}/USDT"
-            if sym in opens:
-                continue
-            try:
-                ticker = exchange.fetch_ticker(sym)
-                last = safe_float(ticker.get("last"))
-                usd_val = last * amt
-                if usd_val >= MIN_HOLD_USD:
-                    insert_open_trade(sym, last, amt, usd_val, buy_order_id="SYNC")
-                    send_telegram(f"🧠 Sync: {sym} قيمة≈{usd_val:.2f} USDT تم تسجيلها OPEN")
-            except:
-                continue
-    except:
-        pass
-
-def monitor_positions(exchange):
-    open_trades = list_trades(status="OPEN", limit=300)
-    for t in open_trades:
-        sym = t["symbol"]
-        buy_price = safe_float(t.get("buy_price"))
-        qty = safe_float(t.get("buy_qty"))
-        if buy_price <= 0 or qty <= 0:
-            continue
-
-        try:
-            last = safe_float(exchange.fetch_ticker(sym).get("last"))
-        except:
-            continue
-        if last <= 0:
-            continue
-
-        tp = buy_price * (1 + TP_PCT)
-        sl = buy_price * (1 - SL_PCT)
-
-        if last >= tp or last <= sl:
-            if MODE == "live":
-                if not API_KEY or not SECRET_KEY:
-                    set_status(last_error="MODE=live لكن مفاتيح Binance غير موجودة", notes="أوقف البيع للحماية")
-                    continue
-                try:
-                    order = exchange.create_market_sell_order(sym, qty)
-                    oid = str(order.get("id"))
-                except Exception as e:
-                    set_status(last_error=f"Sell error: {e}")
-                    continue
-            else:
-                oid = "PAPER_SELL"
-
-            close_trade(sym, last, qty, sell_order_id=oid)
-            tag = "TP ✅" if last >= tp else "SL 🛑"
-            send_telegram(f"📤 {tag} بيع: {sym} @ {last:.6f} qty={qty:.6f}")
+    order = client.order_market_buy(
+        symbol="BTCUSDT",
+        quantity=qty
+    )
+    return f"ORDER PLACED: {order.get('orderId')} qty={qty}"
 
 def main():
+    print("🚀 BOT WORKER STARTED", flush=True)
+
     init_db()
-    exchange = make_exchange()
-    send_telegram(f"🚀 Bot started | MODE={MODE}")
+
+    mode = (get_env("MODE", "paper") or "paper").lower()
+    buy_usdt = float(get_env("BUY_USDT", "15") or 15)
+
+    api_key = get_env("BINANCE_API_KEY")
+    api_secret = get_env("BINANCE_SECRET_KEY")
+
+    client = None
+    if mode == "live":
+        if not api_key or not api_secret:
+            # live بدون مفاتيح = يشتغل بس قراءة سعر + تنبيه
+            print("⚠️ LIVE mode but missing BINANCE keys. Running in read-only (price only).", flush=True)
+        else:
+            client = Client(api_key, api_secret)
+
+    tg_send(f"✅ Bot started. MODE={mode}")
 
     while True:
         try:
-            bal = exchange.fetch_balance()
-            usdt_free = safe_float(bal.get("free", {}).get("USDT", 0.0))
-            set_status(mode=MODE, usdt_free=usdt_free, last_error="", notes="running")
+            price = get_price_btcusdt()
 
-            sync_from_wallet(exchange)
-            monitor_positions(exchange)
+            usdt_free = 0.0
+            notes = ""
 
-            opens = open_symbols()
-            if len(opens) < 5 and usdt_free >= BUY_USDT:
-                for sym in pick_symbols(exchange):
-                    if sym in opens:
-                        continue
-                    try:
-                        last = safe_float(exchange.fetch_ticker(sym).get("last"))
-                    except:
-                        continue
-                    if last <= 0:
-                        continue
+            if mode == "paper":
+                # paper: ما في اتصال حساب حقيقي
+                usdt_free = float(get_env("PAPER_USDT", "1000") or 1000)
+                notes = f"PAPER mode. Simulated USDT={usdt_free}. BUY_USDT={buy_usdt}"
 
-                    qty = qty_from_usdt(last, BUY_USDT)
-                    if qty <= 0:
-                        continue
+            elif mode == "live":
+                if client is None:
+                    usdt_free = 0.0
+                    notes = "LIVE mode (no keys) — price only"
+                else:
+                    usdt_free = get_usdt_free_live(client)
+                    notes = f"LIVE mode. USDT_free={usdt_free}. BUY_USDT={buy_usdt}. ENABLE_TRADING={get_env('ENABLE_TRADING','0')}"
 
-                    if MODE == "live":
-                        if not API_KEY or not SECRET_KEY:
-                            set_status(last_error="MODE=live لكن مفاتيح Binance غير موجودة", notes="أوقف الشراء للحماية")
-                            break
-                        try:
-                            order = exchange.create_market_buy_order(sym, qty)
-                            oid = str(order.get("id"))
-                        except Exception as e:
-                            set_status(last_error=f"Buy error: {e}")
-                            continue
-                    else:
-                        oid = "PAPER_BUY"
+                    # مثال قرار بسيط جداً: لا يشتري تلقائيًا إلا إذا ENABLE_TRADING=1
+                    # هنا فقط للتجربة: إذا عندك رصيد كافي > BUY_USDT
+                    if usdt_free >= buy_usdt:
+                        result = maybe_place_buy_order(client, buy_usdt)
+                        if "ORDER PLACED" in result:
+                            tg_send(f"🟢 {result}")
+                        else:
+                            # فقط ملاحظة (لأن ENABLE_TRADING غالبًا 0)
+                            pass
 
-                    insert_open_trade(sym, last, qty, BUY_USDT, buy_order_id=oid)
-                    send_telegram(f"✅ شراء ({MODE}): {sym} @ {last:.6f} qty={qty:.6f}")
-                    break
+            set_status(
+                mode=mode,
+                is_running=True,
+                updated_at=now_iso(),
+                usdt_free=usdt_free,
+                last_price=price,
+                last_error="",
+                notes=notes
+            )
+
+            print(f"⏳ alive | mode={mode} | price={price} | usdt={usdt_free}", flush=True)
+            time.sleep(20)
 
         except Exception as e:
-            set_status(last_error=str(e), notes="loop exception")
-
-        time.sleep(SLEEP_SEC)
+            err = traceback.format_exc()
+            set_status(
+                mode=mode,
+                is_running=True,   # البوت شغال لكن حدث خطأ
+                updated_at=now_iso(),
+                last_error=err,
+                notes="Error happened. Will retry..."
+            )
+            print("❌ ERROR:", err, flush=True)
+            tg_send(f"❌ Bot error:\n{str(e)[:400]}")
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()
