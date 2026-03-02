@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>لوحة روبوت التداول</title>
+  <style>
+    body{font-family:Arial; background:#0b1220; color:#e7eefc; margin:20px;}
+    .card{background:#121b2e; border:1px solid #243252; padding:16px; border-radius:12px; margin-bottom:14px;}
+    table{width:100%; border-collapse:collapse; margin-top:10px;}
+    th,td{border-bottom:1px solid #243252; padding:10px; text-align:right; font-size:14px;}
+    th{color:#a9b9dd;}
+    .badge{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; border:1px solid #243252;}
+    .ok{color:#7CFFB2;}
+    .warn{color:#FFD37C;}
+    .err{color:#FF7C7C;}
+    .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:12px;}
+    @media (max-width:900px){.grid{grid-template-columns:1fr;}}
+    small{color:#9bb0d6;}
+  </style>
+</head>
+<body>
+
+  <h2>📊 لوحة تحكم روبوت التداول</h2>
+  <small>آخر تحديث: {{ now }}</small>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <div>الوضع</div>
+        <div class="badge">{{ status.mode or "?" }}</div>
+      </div>
+      <div>
+        <div>USDT Free</div>
+        <div class="badge ok">{{ "%.2f"|format(status.usdt_free or 0) }}</div>
+      </div>
+      <div>
+        <div>آخر تشغيل</div>
+        <div class="badge">{{ status.last_run or "-" }}</div>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;">
+      <div>آخر خطأ</div>
+      {% if status.last_error %}
+        <div class="badge err">{{ status.last_error }}</div>
+      {% else %}
+        <div class="badge ok">لا يوجد ✅</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>🟢 الصفقات المفتوحة ({{ open_trades|length }})</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>الرمز</th><th>سعر الشراء</th><th>الكمية</th><th>USDT</th><th>وقت الشراء</th><th>Order ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in open_trades %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td>{{ t.symbol }}</td>
+          <td>{{ t.buy_price }}</td>
+          <td>{{ t.buy_qty }}</td>
+          <td>{{ t.buy_usdt }}</td>
+          <td>{{ t.buy_time }}</td>
+          <td>{{ t.buy_order_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>⚪ الصفقات المغلقة (آخر 100)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>الرمز</th><th>شراء</th><th>بيع</th><th>كمية</th><th>وقت البيع</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in closed_trades %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td>{{ t.symbol }}</td>
+          <td>{{ t.buy_price }}</td>
+          <td>{{ t.sell_price }}</td>
+          <td>{{ t.sell_qty }}</td>
+          <td>{{ t.sell_time }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</body>
+</html>
