@@ -1,228 +1,209 @@
 import os
 import time
-from decimal import Decimal, ROUND_DOWN
-from datetime import datetime
+import math
+from datetime import datetime, timezone
 
 from binance.client import Client
+from binance.enums import SIDE_BUY, SIDE_SELL, ORDER_TYPE_MARKET
 from binance.exceptions import BinanceAPIException
+from binance.helpers import round_step_size
 
-from db import init_db, set_status
 
-# ==========================
-# ENV VARS
-# ==========================
-SYMBOL = os.environ.get("SYMBOL", "BTCUSDT").upper()
+# =========================
+# Config (ENV)
+# =========================
+MODE = os.getenv("MODE", "paper").strip().lower()         # paper | live
+SYMBOLS = [s.strip().upper() for s in os.getenv("SYMBOLS", "BTCUSDT,ETHFIUSDT").split(",") if s.strip()]
+TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "2.0"))   # sell when profit >= this %
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0"))         # sell when loss >= this % (0 disables)
+MIN_USDT_POSITION = float(os.getenv("MIN_USDT_POSITION", "5")) # ignore tiny holdings under this USDT value
+SLEEP_SEC = int(os.getenv("SLEEP_SEC", "20"))
 
-MODE = os.environ.get("MODE", "paper").lower()  # paper / live
-LIVE_TRADING = os.environ.get("LIVE_TRADING", "YES").upper()  # YES to allow real orders
+API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
+API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 
-BUY_USDT = float(os.environ.get("BUY_USDT", "5.0"))          # كم USDT تشتري به
-TP_PCT = float(os.environ.get("TP_PCT", "0.7"))              # Take profit %
-SL_PCT = float(os.environ.get("SL_PCT", "0.7"))              # Stop loss %
+if not API_KEY or not API_SECRET:
+    raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
 
-SLEEP_SECONDS = int(os.environ.get("SLEEP_SECONDS", "20"))
-
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY", "")
-BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET", "")
-
-# Testnet (اختياري)
-USE_TESTNET = os.environ.get("USE_TESTNET", "NO").upper()  # YES/NO
+client = Client(API_KEY, API_SECRET)
 
 
 def now_iso():
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def log(msg):
-    print(msg, flush=True)
-
-
-def require_keys():
-    if MODE == "live" and LIVE_TRADING == "YES":
-        if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-            raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
-
-
-def make_client():
-    client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
-    if USE_TESTNET == "YES":
-        # testnet endpoint
-        client.API_URL = "https://testnet.binance.vision/api"
-    return client
-
-
-def get_price(client, symbol):
-    p = client.get_symbol_ticker(symbol=symbol)["price"]
-    return float(p)
-
-
-def parse_asset(symbol):
-    # BTCUSDT -> BTC
-    # ملاحظة: هذا تبسيط، يعمل لمعظم أزواج USDT
+def base_asset(symbol: str) -> str:
+    # assumes quote is USDT
     if symbol.endswith("USDT"):
         return symbol[:-4]
+    # fallback (not perfect)
     return symbol[:-3]
 
 
-def get_free_balance(client, asset):
-    bal = client.get_asset_balance(asset=asset)
-    if not bal:
-        return 0.0
-    return float(bal.get("free", "0"))
-
-
-def get_lot_step(client, symbol) -> Decimal:
+def get_symbol_filters(symbol: str):
     info = client.get_symbol_info(symbol)
-    lot = next(f for f in info["filters"] if f["filterType"] == "LOT_SIZE")
-    return Decimal(lot["stepSize"])
+    if not info:
+        raise RuntimeError(f"Symbol not found: {symbol}")
+
+    lot = next((f for f in info["filters"] if f["filterType"] == "LOT_SIZE"), None)
+    min_notional = next((f for f in info["filters"] if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL")), None)
+
+    step_size = float(lot["stepSize"]) if lot else 0.0
+    min_qty = float(lot["minQty"]) if lot else 0.0
+    min_notional_val = float(min_notional.get("minNotional", 0.0)) if min_notional else 0.0
+
+    return step_size, min_qty, min_notional_val
 
 
-def floor_to_step(value: Decimal, step: Decimal) -> Decimal:
-    return (value / step).to_integral_value(rounding=ROUND_DOWN) * step
+def get_price(symbol: str) -> float:
+    t = client.get_symbol_ticker(symbol=symbol)
+    return float(t["price"])
 
 
-def to_plain_str(d: Decimal) -> str:
-    # يمنع 1E-7
-    s = format(d.normalize(), "f")
-    # إذا طلع "" بسبب normalize على 0
-    return s if s else "0"
+def safe_qty(symbol: str, qty: float) -> float:
+    step, min_qty, _ = get_symbol_filters(symbol)
+    if step > 0:
+        qty = float(round_step_size(qty, step))
+    # floor small rounding noise
+    qty = float(max(0.0, qty))
+    if qty < min_qty:
+        return 0.0
+    return qty
 
 
-def market_buy_usdt(client, symbol, usdt_amount: float):
+def position_value_usdt(symbol: str, qty: float, price: float) -> float:
+    return qty * price
+
+
+def get_free_balance(asset: str) -> float:
+    b = client.get_asset_balance(asset=asset)
+    if not b:
+        return 0.0
+    return float(b["free"])
+
+
+def avg_entry_from_trades(symbol: str, lookback: int = 50):
     """
-    أفضل طريقة لتجنب مشاكل quantity:
-    BUY MARKET باستخدام quoteOrderQty (USDT)
+    Try to compute average entry price from recent BUY trades.
+    Works for manual buys too, as long as the API key can read trade history.
     """
-    if MODE != "live" or LIVE_TRADING != "YES":
-        log(f"🟡 PAPER BUY (no real order) usdt={usdt_amount}")
-        return {"paper": True, "side": "BUY", "quoteOrderQty": usdt_amount}
-
-    return client.create_order(
-        symbol=symbol,
-        side="BUY",
-        type="MARKET",
-        quoteOrderQty=str(usdt_amount)
-    )
-
-
-def market_sell_all(client, symbol):
-    """
-    SELL MARKET لكمية الرصيد المتاحة من الأصل (BTC مثلا)
-    مع قصّها حسب stepSize.
-    """
-    asset = parse_asset(symbol)
-    free_qty = get_free_balance(client, asset)
-    if free_qty <= 0:
+    try:
+        trades = client.get_my_trades(symbol=symbol, limit=lookback)
+        buys = [t for t in trades if t.get("isBuyer") is True]
+        if not buys:
+            return None
+        # weighted average by qty
+        total_qty = 0.0
+        total_cost = 0.0
+        for t in buys[-lookback:]:
+            qty = float(t["qty"])
+            price = float(t["price"])
+            total_qty += qty
+            total_cost += qty * price
+        if total_qty <= 0:
+            return None
+        return total_cost / total_qty
+    except Exception:
         return None
 
-    if MODE != "live" or LIVE_TRADING != "YES":
-        log(f"🟡 PAPER SELL (no real order) qty={free_qty}")
-        return {"paper": True, "side": "SELL", "quantity": free_qty}
 
-    step = get_lot_step(client, symbol)
-    qty = floor_to_step(Decimal(str(free_qty)), step)
-    qty_str = to_plain_str(qty)
+# in-memory entry snapshot (fallback if no trade history)
+ENTRY_SNAPSHOT = {}
 
-    # إذا أصبحت 0 بعد القصّ
-    if Decimal(qty_str) <= 0:
-        return None
 
-    return client.create_order(
-        symbol=symbol,
-        side="SELL",
-        type="MARKET",
-        quantity=qty_str
-    )
+def get_entry_price(symbol: str, current_price: float) -> float:
+    """
+    Priority:
+    1) average entry from trades (best)
+    2) snapshot from when bot first saw this holding
+    """
+    e = avg_entry_from_trades(symbol)
+    if e:
+        return float(e)
+
+    if symbol not in ENTRY_SNAPSHOT:
+        ENTRY_SNAPSHOT[symbol] = float(current_price)
+    return float(ENTRY_SNAPSHOT[symbol])
+
+
+def market_sell(symbol: str, qty: float):
+    if MODE != "live":
+        print(f"🟡 PAPER SELL (no real order) | {symbol} qty={qty}")
+        return {"paper": True}
+
+    try:
+        order = client.create_order(
+            symbol=symbol,
+            side=SIDE_SELL,
+            type=ORDER_TYPE_MARKET,
+            quantity=qty,
+        )
+        return order
+    except BinanceAPIException as e:
+        raise
+
+
+def manage_symbol(symbol: str):
+    price = get_price(symbol)
+    base = base_asset(symbol)
+    qty = get_free_balance(base)
+    qty = safe_qty(symbol, qty)
+
+    if qty <= 0:
+        # no holding -> nothing to sell/manage
+        return
+
+    pos_usdt = position_value_usdt(symbol, qty, price)
+    if pos_usdt < MIN_USDT_POSITION:
+        # ignore tiny dust
+        return
+
+    entry = get_entry_price(symbol, price)
+    pnl_pct = ((price - entry) / entry) * 100.0 if entry > 0 else 0.0
+
+    status = f"⏳ alive | {symbol} | mode={MODE} | qty={qty} | entry={entry:.6f} | price={price:.6f} | pnl={pnl_pct:.2f}% | value≈{pos_usdt:.2f} USDT"
+    print(status)
+
+    # TP
+    if pnl_pct >= TAKE_PROFIT_PCT:
+        print(f"✅ TAKE PROFIT hit | {symbol} pnl={pnl_pct:.2f}% >= {TAKE_PROFIT_PCT}% -> SELL")
+        try:
+            res = market_sell(symbol, qty)
+            print(f"✅ SELL DONE | {symbol} qty={qty} | res={('paper' if MODE!='live' else 'live')}")
+        except BinanceAPIException as e:
+            print(f"❌ Binance API Error on SELL | {symbol} | {e}")
+        return
+
+    # SL
+    if STOP_LOSS_PCT > 0 and pnl_pct <= -abs(STOP_LOSS_PCT):
+        print(f"🛑 STOP LOSS hit | {symbol} pnl={pnl_pct:.2f}% <= -{STOP_LOSS_PCT}% -> SELL")
+        try:
+            res = market_sell(symbol, qty)
+            print(f"🛑 SELL DONE | {symbol} qty={qty} | res={('paper' if MODE!='live' else 'live')}")
+        except BinanceAPIException as e:
+            print(f"❌ Binance API Error on SELL | {symbol} | {e}")
+        return
 
 
 def main():
-    init_db()
-
-    # الوضع الافتراضي آمن
-    set_status(mode=MODE, symbol=SYMBOL, last_action="worker_start", last_error=None, notes="")
-
-    require_keys()
-    client = make_client()
-
-    asset = parse_asset(SYMBOL)
-
-    in_position = 0
-    entry_price = None
-    tp_price = None
-    sl_price = None
-
-    log("🚀 BOT WORKER STARTED")
+    print("🚀 BOT WORKER STARTED")
+    print(f"🧩 symbols={SYMBOLS} | mode={MODE} | TP={TAKE_PROFIT_PCT}% | SL={STOP_LOSS_PCT}% | MIN_USDT_POSITION={MIN_USDT_POSITION}")
 
     while True:
         try:
-            price = get_price(client, SYMBOL)
+            for sym in SYMBOLS:
+                try:
+                    manage_symbol(sym)
+                except BinanceAPIException as e:
+                    # common errors: invalid API key, IP restriction, permissions
+                    print(f"❌ Binance API Error | {sym} | {e}")
+                except Exception as e:
+                    print(f"❌ Error | {sym} | {e}")
 
-            usdt_free = get_free_balance(client, "USDT")
-            asset_free = get_free_balance(client, asset)
-
-            # تحديث حالة
-            set_status(
-                last_price=price,
-                usdt_free=usdt_free,
-                asset_free=asset_free,
-                in_position=in_position,
-                entry_price=entry_price,
-                tp_price=tp_price,
-                sl_price=sl_price,
-                last_error=None,
-                notes=f"alive | mode={MODE} | price={price} | usdt={usdt_free}"
-            )
-
-            log(f"⏳ alive | mode={MODE} | price={price} | usdt={usdt_free}")
-
-            # ==========================
-            # STRATEGY (بسيط جدًا):
-            # - إذا ما عندنا صفقة -> شراء مرة واحدة بمبلغ BUY_USDT
-            # - إذا عندنا صفقة -> بيع عند TP أو SL
-            # ==========================
-
-            if in_position == 0:
-                # شراء مرة واحدة فقط كاختبار
-                if usdt_free >= BUY_USDT or MODE != "live":
-                    order = market_buy_usdt(client, SYMBOL, BUY_USDT)
-                    entry_price = price
-                    tp_price = entry_price * (1 + TP_PCT / 100.0)
-                    sl_price = entry_price * (1 - SL_PCT / 100.0)
-                    in_position = 1
-                    set_status(last_action=f"BUY placed (paper={order.get('paper', False)})")
-                    log(f"✅ BUY | entry={entry_price} tp={tp_price} sl={sl_price} buy_usdt={BUY_USDT}")
-                else:
-                    set_status(last_action="no_usdt_to_buy")
-            else:
-                # مراقبة TP/SL
-                if tp_price and price >= tp_price:
-                    sell = market_sell_all(client, SYMBOL)
-                    in_position = 0
-                    entry_price = None
-                    tp_price = None
-                    sl_price = None
-                    set_status(last_action=f"SELL TP (paper={bool(sell and sell.get('paper', False))})")
-                    log("✅ SOLD at TP")
-                elif sl_price and price <= sl_price:
-                    sell = market_sell_all(client, SYMBOL)
-                    in_position = 0
-                    entry_price = None
-                    tp_price = None
-                    sl_price = None
-                    set_status(last_action=f"SELL SL (paper={bool(sell and sell.get('paper', False))})")
-                    log("🛑 SOLD at SL")
-                else:
-                    set_status(last_action="holding")
-
-        except BinanceAPIException as e:
-            # خطأ من باينانس
-            set_status(last_error=f"BinanceAPIException: {e.message}", last_action="error")
-            log(f"❌ Binance API Error: {e}")
         except Exception as e:
-            set_status(last_error=f"{type(e).__name__}: {str(e)}", last_action="error")
-            log(f"❌ ERROR: {type(e).__name__}: {e}")
+            print(f"❌ Loop error: {e}")
 
-        time.sleep(SLEEP_SECONDS)
+        time.sleep(SLEEP_SEC)
 
 
 if __name__ == "__main__":
