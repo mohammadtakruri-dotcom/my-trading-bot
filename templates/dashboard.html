@@ -1,91 +1,91 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>{{ app_name }}</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Trading Bot Dashboard</title>
   <style>
-    body{font-family:Arial, sans-serif; background:#0b1220; color:#e8eefc; margin:0; padding:20px;}
-    .card{background:#121b2e; border:1px solid #223255; border-radius:14px; padding:16px; max-width:900px; margin:auto;}
-    h1{margin:0 0 10px 0; font-size:22px;}
-    .grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px;}
-    .box{background:#0f1730; border:1px solid #223255; border-radius:12px; padding:12px;}
-    .label{opacity:.8; font-size:13px; margin-bottom:6px;}
-    .value{font-size:18px; font-weight:700;}
-    .pill{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:700;}
-    .ok{background:#0d3b25; color:#8ff3b8; border:1px solid #1f6b45;}
-    .bad{background:#3b0d0d; color:#ffb3b3; border:1px solid #7a1f1f;}
-    .muted{opacity:.8; font-size:13px;}
-    .row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
-    pre{white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #223255; overflow:auto;}
-    a{color:#9ecbff}
+    body{font-family:Tahoma,Arial; margin:24px; background:#f7f7fb}
+    .card{background:#fff; border:1px solid #e6e6ef; border-radius:12px; padding:16px; max-width:820px}
+    .row{display:flex; gap:12px; flex-wrap:wrap}
+    .box{flex:1; min-width:240px; border:1px solid #eee; border-radius:10px; padding:12px}
+    .muted{color:#666}
+    .bad{color:#b00020}
+    .ok{color:#0b7a28}
+    code{background:#f1f1f7; padding:2px 6px; border-radius:6px}
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="row" style="justify-content:space-between;">
-      <div>
-        <h1>لوحة التحكم — {{ app_name }}</h1>
-        <div class="muted">تحديث تلقائي كل 10 ثواني</div>
+    <h2>لوحة متابعة البوت</h2>
+    <p class="muted">تحديث مباشر من قاعدة بيانات SQLite داخل التطبيق</p>
+
+    <div class="row">
+      <div class="box">
+        <b>الوضع</b><br/>
+        <span id="mode">{{ s.get('mode','') }}</span>
       </div>
-      <div>
-        {% if status.get("is_running") %}
-          <span class="pill ok">RUNNING</span>
-        {% else %}
-          <span class="pill bad">STOPPED</span>
-        {% endif %}
+      <div class="box">
+        <b>الرمز</b><br/>
+        <span id="symbol">{{ s.get('symbol','') }}</span>
+      </div>
+      <div class="box">
+        <b>آخر سعر</b><br/>
+        <span id="last_price">{{ s.get('last_price','') }}</span>
       </div>
     </div>
 
-    <div class="grid">
+    <div class="row" style="margin-top:12px">
       <div class="box">
-        <div class="label">MODE</div>
-        <div class="value" id="mode">{{ status.get("mode","") }}</div>
+        <b>USDT Free</b><br/>
+        <span id="usdt_free">{{ s.get('usdt_free','') }}</span>
       </div>
       <div class="box">
-        <div class="label">آخر تحديث</div>
-        <div class="value" id="updated_at">{{ status.get("updated_at","") }}</div>
+        <b>Asset Free</b><br/>
+        <span id="asset_free">{{ s.get('asset_free','') }}</span>
       </div>
       <div class="box">
-        <div class="label">USDT Free</div>
-        <div class="value" id="usdt_free">{{ status.get("usdt_free",0) }}</div>
-      </div>
-      <div class="box">
-        <div class="label">BTC/USDT آخر سعر</div>
-        <div class="value" id="last_price">{{ status.get("last_price",0) }}</div>
+        <b>In Position</b><br/>
+        <span id="in_position">{{ s.get('in_position','') }}</span>
       </div>
     </div>
 
-    <div class="box" style="margin-top:12px;">
-      <div class="label">ملاحظات</div>
-      <div class="value" id="notes" style="font-size:14px; font-weight:500;"></div>
+    <div class="row" style="margin-top:12px">
+      <div class="box">
+        <b>Entry</b><br/>
+        <span id="entry_price">{{ s.get('entry_price','') }}</span>
+      </div>
+      <div class="box">
+        <b>TP / SL</b><br/>
+        TP: <span id="tp_price">{{ s.get('tp_price','') }}</span><br/>
+        SL: <span id="sl_price">{{ s.get('sl_price','') }}</span>
+      </div>
+      <div class="box">
+        <b>آخر عملية</b><br/>
+        <span id="last_action">{{ s.get('last_action','') }}</span>
+      </div>
     </div>
 
-    <div class="box" style="margin-top:12px;">
-      <div class="label">آخر خطأ</div>
-      <pre id="last_error">{{ status.get("last_error","") }}</pre>
+    <div class="box" style="margin-top:12px">
+      <b>آخر خطأ</b><br/>
+      <span id="last_error" class="bad">{{ s.get('last_error','') }}</span>
     </div>
 
-    <div class="muted" style="margin-top:10px;">
-      API: <a href="/api/status" target="_blank">/api/status</a> — Health: <a href="/health" target="_blank">/health</a>
-    </div>
+    <p class="muted" style="margin-top:12px">
+      API: <code>/api/status</code> — Health: <code>/health</code>
+    </p>
   </div>
 
 <script>
 async function refresh(){
-  try{
-    const r = await fetch('/api/status', {cache:'no-store'});
-    const s = await r.json();
-    document.getElementById('mode').textContent = s.mode ?? '';
-    document.getElementById('updated_at').textContent = s.updated_at ?? '';
-    document.getElementById('usdt_free').textContent = s.usdt_free ?? 0;
-    document.getElementById('last_price').textContent = s.last_price ?? 0;
-    document.getElementById('last_error').textContent = s.last_error ?? '';
-    document.getElementById('notes').textContent = s.notes ?? '';
-  }catch(e){}
+  const r = await fetch('/api/status');
+  const s = await r.json();
+  for (const k in s){
+    const el = document.getElementById(k);
+    if(el) el.textContent = s[k] === null ? '' : s[k];
+  }
 }
-setInterval(refresh, 10000);
-refresh();
+setInterval(refresh, 3000);
 </script>
 </body>
 </html>
