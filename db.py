@@ -1,21 +1,16 @@
-# db.py
-import os
-import mysql.connector
+# db.py (SQLite)
+import os, sqlite3
 from datetime import datetime, timezone
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASS"),
-    "database": os.getenv("DB_NAME"),
-    "connect_timeout": 10,
-}
+DB_PATH = os.getenv("SQLITE_PATH", "/tmp/trading.db")  # /tmp للتجربة
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 def conn():
-    return mysql.connector.connect(**DB_CONFIG)
+    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
 
 def init_db():
     c = conn()
@@ -23,35 +18,36 @@ def init_db():
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS trades (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        symbol VARCHAR(30) NOT NULL,
-        status VARCHAR(10) NOT NULL DEFAULT 'OPEN',   -- OPEN/CLOSED
-        buy_price DOUBLE,
-        buy_qty DOUBLE,
-        buy_usdt DOUBLE,
-        buy_order_id VARCHAR(64),
-        buy_time VARCHAR(40),
-        sell_price DOUBLE,
-        sell_qty DOUBLE,
-        sell_order_id VARCHAR(64),
-        sell_time VARCHAR(40)
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'OPEN',
+        buy_price REAL,
+        buy_qty REAL,
+        buy_usdt REAL,
+        buy_order_id TEXT,
+        buy_time TEXT,
+        sell_price REAL,
+        sell_qty REAL,
+        sell_order_id TEXT,
+        sell_time TEXT
     )
     """)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS bot_status (
-        id INT PRIMARY KEY,
-        mode VARCHAR(10),
-        last_run VARCHAR(40),
+        id INTEGER PRIMARY KEY,
+        mode TEXT,
+        last_run TEXT,
         last_error TEXT,
-        usdt_free DOUBLE,
+        usdt_free REAL,
         notes TEXT
     )
     """)
 
-    # صف واحد ثابت
-    cur.execute("INSERT IGNORE INTO bot_status(id, mode, last_run, last_error, usdt_free, notes) VALUES(1,%s,%s,%s,%s,%s)",
-                (os.getenv("MODE","paper"), now_iso(), "", 0.0, "initialized"))
+    cur.execute("""
+    INSERT OR IGNORE INTO bot_status(id, mode, last_run, last_error, usdt_free, notes)
+    VALUES(1, ?, ?, ?, ?, ?)
+    """, (os.getenv("MODE","paper"), now_iso(), "", 0.0, "initialized"))
 
     c.commit()
     c.close()
