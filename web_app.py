@@ -4,15 +4,14 @@ from db import init_db, get_status, list_trades
 
 app = Flask(__name__)
 
-# ✅ Flask 3: before_first_request تم حذفها
-# لذلك نشغّل إنشاء قاعدة البيانات مباشرة عند تشغيل التطبيق
+# إنشاء قاعدة البيانات عند بدء التطبيق
 init_db()
 
-@app.get("/health")
+@app.route("/health")
 def health():
     return {"ok": True}
 
-@app.get("/")
+@app.route("/")
 def dashboard():
     status = get_status()
     open_trades = list_trades(status="OPEN", limit=100)
@@ -34,4 +33,4 @@ def dashboard():
     )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
+    app.run(host="0.0.0.0", port=8080)
