@@ -28,15 +28,20 @@ MIN_USDT_FREE_TO_BUY = float(os.getenv("MIN_USDT_FREE_TO_BUY", "3"))
 # Risk controls
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "2"))  # max symbols with positions (non-zero qty)
 
+# Cooldown to avoid instant re-buy loops (seconds)
+COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "30"))
+
 # ================== Telegram ==================
 def tg_send(msg: str):
     if not TG_TOKEN or not TG_ID:
         return
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, timeout=10, data={"chat_id": TG_ID, "text": msg})
-    except Exception:
-        pass
+        r = requests.post(url, timeout=10, data={"chat_id": TG_ID, "text": msg})
+        if r.status_code != 200:
+            print("TG ERROR:", r.status_code, (r.text or "")[:200])
+    except Exception as e:
+        print("TG EXC:", e)
 
 # ================== Binance Helpers ==================
 def make_client():
@@ -64,12 +69,16 @@ def get_lot_step(client: Client, symbol: str):
         if f["filterType"] == "LOT_SIZE":
             step = float(f["stepSize"])
             min_qty = float(f["minQty"])
-        if f["filterType"] == "MIN_NOTIONAL":
-            min_notional = float(f.get("minNotional", "0"))
+        if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
+            # sometimes it's NOTIONAL, sometimes MIN_NOTIONAL
+            mn = f.get("minNotional") or f.get("notional") or f.get("minNotional", "0")
+            try:
+                min_notional = float(mn)
+            except Exception:
+                min_notional = 0.0
     return step or 0.0, min_qty or 0.0, min_notional or 0.0
 
 def base_asset(symbol: str) -> str:
-    # works for XXXUSDT pairs
     if symbol.endswith("USDT"):
         return symbol[:-4]
     return symbol
@@ -79,7 +88,6 @@ def get_balance_free(client: Client, asset: str) -> float:
     return float(b["free"]) if b else 0.0
 
 def market_buy(client: Client, symbol: str, usdt_amount: float):
-    # Binance market buy can be by quoteOrderQty (USDT amount) on many symbols
     return client.create_order(
         symbol=symbol,
         side="BUY",
@@ -96,14 +104,28 @@ def market_sell(client: Client, symbol: str, qty: float):
     )
 
 def format_qty(q: float) -> str:
-    # avoids illegal characters, uses dot decimal, strips trailing zeros
     s = f"{q:.8f}".rstrip("0").rstrip(".")
     return s if s else "0"
 
+def get_avg_entry_from_trades(client: Client, symbol: str, lookback: int = 500) -> float:
+    """
+    Compute average buy price from recent trades.
+    If no buys found, returns 0.
+    """
+    trades = client.get_my_trades(symbol=symbol, limit=lookback)
+    buy_qty = 0.0
+    buy_cost = 0.0
+    for t in trades:
+        if t.get("isBuyer"):
+            q = float(t["qty"])
+            p = float(t["price"])
+            buy_qty += q
+            buy_cost += q * p
+    return (buy_cost / buy_qty) if buy_qty > 0 else 0.0
+
 # ================== Strategy ==================
 def should_buy(symbol: str, price: float) -> bool:
-    # Placeholder strategy: buy if no position and always allowed
-    # You can replace with your signals later.
+    # Placeholder: always True
     return True
 
 def pnl_pct(entry: float, price: float) -> float:
@@ -111,25 +133,30 @@ def pnl_pct(entry: float, price: float) -> float:
         return 0.0
     return (price - entry) / entry * 100.0
 
-# ================== Position tracking in memory ==================
-# For simplicity: track entry per symbol in SQLite status "position_entry/qty" only for currently processed symbol.
-# Better: create positions table. We'll keep it simple but safe.
-POSITIONS = {}  # symbol -> {"qty": float, "entry": float}
+# ================== Positions (in memory) ==================
+POSITIONS = {}       # symbol -> {"qty": float, "entry": float}
+LAST_TRADE_TS = {}   # symbol -> int timestamp (cooldown)
 
 def load_positions_from_wallet(client: Client):
     """
-    Detect existing holdings (like ETHFI bought manually).
-    If balance is > min_qty, we treat it as a position with entry=0 (unknown),
-    then we set entry as current price for PNL calc baseline unless you set ENTRY_OVERRIDE.
+    Detect existing holdings (manual buys).
     """
     for sym in SYMBOLS:
         asset = base_asset(sym)
         qty = get_balance_free(client, asset)
         if qty > 0:
             POSITIONS.setdefault(sym, {"qty": qty, "entry": 0.0})
+            LAST_TRADE_TS.setdefault(sym, 0)
 
 def count_open_positions():
-    return sum(1 for s,v in POSITIONS.items() if v.get("qty",0) > 0)
+    return sum(1 for s, v in POSITIONS.items() if float(v.get("qty", 0)) > 0)
+
+def in_cooldown(sym: str) -> bool:
+    last_ts = int(LAST_TRADE_TS.get(sym, 0) or 0)
+    return (time.time() - last_ts) < COOLDOWN_SEC
+
+def mark_trade(sym: str):
+    LAST_TRADE_TS[sym] = int(time.time())
 
 def main():
     init_db()
@@ -143,9 +170,7 @@ def main():
 
     while True:
         try:
-            # USDT free check
             usdt_free = get_balance_free(client, "USDT")
-            open_pos = count_open_positions()
 
             for sym in SYMBOLS:
                 price = get_price(client, sym)
@@ -153,13 +178,27 @@ def main():
                 qty = float(pos.get("qty", 0.0))
                 entry = float(pos.get("entry", 0.0))
 
-                # If we have qty but no entry (manual buy), set entry baseline = current price first time
+                # If holding exists but entry unknown => compute avg entry from trades
                 if qty > 0 and entry <= 0:
-                    POSITIONS[sym]["entry"] = price
-                    entry = price
-                    tg_send(f"📌 Detected existing holding {sym} qty={qty:.6f}. Set entry baseline={price:.4f}")
+                    avg = 0.0
+                    if MODE == "live":
+                        try:
+                            avg = get_avg_entry_from_trades(client, sym)
+                        except Exception as e:
+                            print("AvgEntry Error:", e)
+
+                    if avg > 0:
+                        POSITIONS[sym]["entry"] = avg
+                        entry = avg
+                        tg_send(f"📌 Detected holding {sym} qty={qty:.6f}. Avg entry={avg:.6f}")
+                    else:
+                        # fallback baseline
+                        POSITIONS[sym]["entry"] = price
+                        entry = price
+                        tg_send(f"📌 Detected holding {sym} qty={qty:.6f}. Entry unknown, baseline={price:.6f}")
 
                 p = pnl_pct(entry, price) if qty > 0 else 0.0
+                open_pos = count_open_positions()
 
                 set_status(
                     mode=MODE,
@@ -180,17 +219,30 @@ def main():
                         msg = f"✅ TP reached {sym} pnl={p:.2f}% -> SELL"
                         print(msg)
                         tg_send(msg)
+
                         if MODE == "live":
                             step, min_qty, min_notional = get_lot_step(client, sym)
                             sell_qty = round_step(qty, step)
+                            notional = sell_qty * price
+
                             if sell_qty < min_qty:
                                 raise RuntimeError(f"{sym} sell_qty<{min_qty}. qty={sell_qty}")
-                            order = market_sell(client, sym, sell_qty)
+
+                            if min_notional > 0 and notional < min_notional:
+                                raise RuntimeError(f"{sym} notional<{min_notional}. notional={notional}")
+
+                            market_sell(client, sym, sell_qty)
                             add_trade(sym, "SELL", sell_qty, price, f"TP {p:.2f}%")
                             POSITIONS[sym]["qty"] = max(0.0, qty - sell_qty)
+                            mark_trade(sym)
+
+                            # refresh USDT after trade
+                            usdt_free = get_balance_free(client, "USDT")
                         else:
                             add_trade(sym, "SELL", qty, price, f"PAPER TP {p:.2f}%")
                             POSITIONS[sym]["qty"] = 0.0
+                            mark_trade(sym)
+
                         continue
 
                     # Stop Loss
@@ -198,26 +250,38 @@ def main():
                         msg = f"🛑 SL hit {sym} pnl={p:.2f}% -> SELL"
                         print(msg)
                         tg_send(msg)
+
                         if MODE == "live":
                             step, min_qty, min_notional = get_lot_step(client, sym)
                             sell_qty = round_step(qty, step)
+                            notional = sell_qty * price
+
                             if sell_qty < min_qty:
                                 raise RuntimeError(f"{sym} sell_qty<{min_qty}. qty={sell_qty}")
-                            order = market_sell(client, sym, sell_qty)
+
+                            if min_notional > 0 and notional < min_notional:
+                                raise RuntimeError(f"{sym} notional<{min_notional}. notional={notional}")
+
+                            market_sell(client, sym, sell_qty)
                             add_trade(sym, "SELL", sell_qty, price, f"SL {p:.2f}%")
                             POSITIONS[sym]["qty"] = max(0.0, qty - sell_qty)
+                            mark_trade(sym)
+
+                            # refresh USDT after trade
+                            usdt_free = get_balance_free(client, "USDT")
                         else:
                             add_trade(sym, "SELL", qty, price, f"PAPER SL {p:.2f}%")
                             POSITIONS[sym]["qty"] = 0.0
+                            mark_trade(sym)
+
                         continue
 
-                    # If holding, don't buy more by default
-                    print(f"⏳ {sym} holding | price={price:.4f} pnl={p:.2f}% qty={qty:.6f}")
+                    print(f"⏳ {sym} holding | price={price:.6f} pnl={p:.2f}% qty={qty:.6f}")
                     continue
 
                 # ---------- BUY logic ----------
-                # Risk controls
                 open_pos = count_open_positions()
+
                 if open_pos >= MAX_OPEN_POSITIONS:
                     print(f"⚠️ Max positions reached ({MAX_OPEN_POSITIONS}). Skip buy {sym}")
                     continue
@@ -226,24 +290,38 @@ def main():
                     print(f"⚠️ USDT free too low: {usdt_free:.4f}. Skip buy {sym}")
                     continue
 
+                if in_cooldown(sym):
+                    print(f"⏳ Cooldown active for {sym} ({COOLDOWN_SEC}s). Skip buy.")
+                    continue
+
                 if should_buy(sym, price):
                     msg = f"🟢 BUY signal {sym} buy_usdt={BUY_USDT} mode={MODE}"
                     print(msg)
                     tg_send(msg)
 
                     if MODE == "live":
-                        # Market buy by USDT amount
-                        order = market_buy(client, sym, BUY_USDT)
-                        # After buy, refresh balance
+                        # Check min notional for buy amount (approx)
+                        step, min_qty, min_notional = get_lot_step(client, sym)
+                        if min_notional > 0 and BUY_USDT < min_notional:
+                            raise RuntimeError(f"{sym} BUY_USDT<{min_notional} minNotional. BUY_USDT={BUY_USDT}")
+
+                        market_buy(client, sym, BUY_USDT)
+
                         asset = base_asset(sym)
                         qty_new = get_balance_free(client, asset)
+
+                        # if qty_new too small, still store it but note
                         POSITIONS[sym] = {"qty": qty_new, "entry": price}
                         add_trade(sym, "BUY", qty_new, price, "LIVE market buy")
+                        mark_trade(sym)
+
+                        # refresh USDT after buy
+                        usdt_free = get_balance_free(client, "USDT")
                     else:
-                        # Paper
                         qty_paper = BUY_USDT / price
                         POSITIONS[sym] = {"qty": qty_paper, "entry": price}
                         add_trade(sym, "BUY", qty_paper, price, "PAPER buy")
+                        mark_trade(sym)
 
                 time.sleep(1)
 
