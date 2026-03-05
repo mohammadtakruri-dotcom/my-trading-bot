@@ -1,4 +1,5 @@
 import os, time, math, traceback
+from collections import deque
 import requests
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
@@ -18,25 +19,42 @@ MODE = "live" if (ENABLE_TRADING == "1" or LIVE_TRADING == "1") else "paper"
 SYMBOLS = os.getenv("SYMBOLS", os.getenv("SYMBOL", "BTCUSDT")).strip()
 SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 
-BUY_USDT = float(os.getenv("BUY_USDT", "10"))
-TP_PCT = float(os.getenv("TP_PCT", "2"))  # take profit %
-SL_PCT = float(os.getenv("SL_PCT", "1"))  # stop loss %
-CHECK_INTERVAL = float(os.getenv("CHECK_INTERVAL", "20"))
+# Scalping defaults (تقدر تغيّرها من Environment)
+BUY_USDT = float(os.getenv("BUY_USDT", "12"))
+TP_PCT = float(os.getenv("TP_PCT", "0.6"))   # take profit % (scalp)
+SL_PCT = float(os.getenv("SL_PCT", "0.6"))   # stop loss % (scalp)
+CHECK_INTERVAL = float(os.getenv("CHECK_INTERVAL", "10"))
 
-MIN_USDT_FREE_TO_BUY = float(os.getenv("MIN_USDT_FREE_TO_BUY", "12"))
+MIN_USDT_FREE_TO_BUY = float(os.getenv("MIN_USDT_FREE_TO_BUY", "15"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "2"))
-COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "60"))
+COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "45"))
 
-# عملي: تجاهل dust (حتى لا يمنع الشراء ولا يسبب محاولة بيع متكررة)
-DUST_IGNORE = os.getenv("DUST_IGNORE", "1").strip()  # 1 = ignore dust
-DUST_IGNORE_BUFFER = float(os.getenv("DUST_IGNORE_BUFFER", "0.3"))  # buffer under minNotional
+# Dust ignore
+DUST_IGNORE = os.getenv("DUST_IGNORE", "1").strip()  # 1=ignore
+DUST_IGNORE_BUFFER = float(os.getenv("DUST_IGNORE_BUFFER", "0.3"))
 
-# Debug / Heartbeat
+# Heartbeat
 HEARTBEAT_SEC = int(os.getenv("HEARTBEAT_SEC", "30"))
+
+# Indicators (Scalping)
+KLINES_INTERVAL = os.getenv("KLINES_INTERVAL", "1m").strip()   # 1m recommended
+KLINES_LIMIT = int(os.getenv("KLINES_LIMIT", "80"))            # enough for RSI/EMA
+KLINES_REFRESH_SEC = int(os.getenv("KLINES_REFRESH_SEC", "45"))# refresh candles every 45s
+
+EMA_FAST = int(os.getenv("EMA_FAST", "9"))
+EMA_SLOW = int(os.getenv("EMA_SLOW", "21"))
+RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
+
+# Filters to avoid bad entries
+RSI_BUY_MIN = float(os.getenv("RSI_BUY_MIN", "48"))
+RSI_BUY_MAX = float(os.getenv("RSI_BUY_MAX", "68"))
+
+# Extra exit rules
+EXIT_ON_EMA_CROSSDOWN = os.getenv("EXIT_ON_EMA_CROSSDOWN", "1").strip()  # 1=yes
+EXIT_RSI_OVERBOUGHT = float(os.getenv("EXIT_RSI_OVERBOUGHT", "75"))      # if RSI too high -> take profit earlier
 
 # ================== Telegram (DEBUG) ==================
 def tg_send(msg: str):
-    # هذه الدالة تطبع سبب عدم إرسال تلجرام (مهم عندك الآن)
     print("TG_SEND attempt. token?", bool(TG_TOKEN), "id?", TG_ID)
     if not TG_TOKEN or not TG_ID:
         print("TG missing TG_TOKEN/TG_ID")
@@ -53,12 +71,22 @@ def make_client():
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
         raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
     c = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
-    # اختبار سريع (لو علق هنا ستعرف)
     c.ping()
     return c
 
 def get_price(client: Client, symbol: str) -> float:
     return float(client.get_symbol_ticker(symbol=symbol)["price"])
+
+def base_asset(symbol: str) -> str:
+    return symbol[:-4] if symbol.endswith("USDT") else symbol
+
+def get_balance_free(client: Client, asset: str) -> float:
+    b = client.get_asset_balance(asset=asset)
+    return float(b["free"]) if b else 0.0
+
+def format_qty(q: float) -> str:
+    s = f"{q:.8f}".rstrip("0").rstrip(".")
+    return s if s else "0"
 
 def round_step(qty: float, step: float) -> float:
     if step == 0:
@@ -84,17 +112,6 @@ def get_lot_step(client: Client, symbol: str):
                 min_notional = 0.0
     return step, min_qty, min_notional
 
-def base_asset(symbol: str) -> str:
-    return symbol[:-4] if symbol.endswith("USDT") else symbol
-
-def get_balance_free(client: Client, asset: str) -> float:
-    b = client.get_asset_balance(asset=asset)
-    return float(b["free"]) if b else 0.0
-
-def format_qty(q: float) -> str:
-    s = f"{q:.8f}".rstrip("0").rstrip(".")
-    return s if s else "0"
-
 def market_buy(client: Client, symbol: str, usdt_amount: float):
     return client.create_order(
         symbol=symbol,
@@ -111,36 +128,40 @@ def market_sell(client: Client, symbol: str, qty: float):
         quantity=format_qty(qty),
     )
 
-def get_avg_entry_from_trades(client: Client, symbol: str, lookback: int = 500) -> float:
-    trades = client.get_my_trades(symbol=symbol, limit=lookback)
-    buy_qty = 0.0
-    buy_cost = 0.0
-    for t in trades:
-        if t.get("isBuyer"):
-            q = float(t["qty"])
-            p = float(t["price"])
-            buy_qty += q
-            buy_cost += q * p
-    return (buy_cost / buy_qty) if buy_qty > 0 else 0.0
+# ================== Indicators ==================
+def ema(prev_ema: float, price: float, period: int) -> float:
+    k = 2 / (period + 1)
+    return price * k + prev_ema * (1 - k)
 
-# ================== Strategy ==================
-def should_buy(symbol: str, price: float) -> bool:
-    # Placeholder: always buy when allowed (يمكنك تطويرها لاحقًا)
-    return True
-
-def pnl_pct(entry: float, price: float) -> float:
-    if entry <= 0:
+def calc_rsi(closes, period=14):
+    if len(closes) < period + 1:
         return 0.0
-    return (price - entry) / entry * 100.0
+    gains = 0.0
+    losses = 0.0
+    for i in range(-period, 0):
+        diff = closes[i] - closes[i - 1]
+        if diff >= 0:
+            gains += diff
+        else:
+            losses += (-diff)
+    if losses == 0:
+        return 100.0
+    rs = gains / losses
+    return 100.0 - (100.0 / (1.0 + rs))
 
-def is_dust(qty: float, price: float, min_notional: float) -> bool:
-    if qty <= 0 or min_notional <= 0:
-        return False
-    return (qty * price) < (min_notional - DUST_IGNORE_BUFFER)
+def get_klines_interval():
+    # map env to binance constants
+    m = {
+        "1m": Client.KLINE_INTERVAL_1MINUTE,
+        "3m": Client.KLINE_INTERVAL_3MINUTE,
+        "5m": Client.KLINE_INTERVAL_5MINUTE,
+    }
+    return m.get(KLINES_INTERVAL, Client.KLINE_INTERVAL_1MINUTE)
 
-# ================== State ==================
+# ================== Risk / State ==================
 POSITIONS = {}       # sym -> {"entry": float}
 LAST_TRADE_TS = {}   # sym -> ts
+STATE = {}           # sym -> indicator state
 
 def in_cooldown(sym: str) -> bool:
     last_ts = int(LAST_TRADE_TS.get(sym, 0) or 0)
@@ -148,6 +169,11 @@ def in_cooldown(sym: str) -> bool:
 
 def mark_trade(sym: str):
     LAST_TRADE_TS[sym] = int(time.time())
+
+def is_dust(qty: float, price: float, min_notional: float) -> bool:
+    if qty <= 0 or min_notional <= 0:
+        return False
+    return (qty * price) < (min_notional - DUST_IGNORE_BUFFER)
 
 def count_open_positions_wallet(client: Client) -> int:
     cnt = 0
@@ -158,42 +184,133 @@ def count_open_positions_wallet(client: Client) -> int:
             cnt += 1
     return cnt
 
+def refresh_indicators(client: Client, sym: str):
+    now = int(time.time())
+    st = STATE.setdefault(sym, {
+        "closes": deque(maxlen=300),
+        "last_klines_ts": 0,
+        "ema_fast": 0.0,
+        "ema_slow": 0.0,
+        "prev_ema_fast": 0.0,
+        "prev_ema_slow": 0.0,
+        "rsi": 0.0,
+        "last_close": 0.0,
+        "warm": False
+    })
+
+    if (now - st["last_klines_ts"]) < KLINES_REFRESH_SEC and st["warm"]:
+        return st
+
+    interval = get_klines_interval()
+    kl = client.get_klines(symbol=sym, interval=interval, limit=KLINES_LIMIT)
+    closes = [float(k[4]) for k in kl]  # close price
+    st["closes"].clear()
+    for c in closes:
+        st["closes"].append(c)
+
+    st["last_close"] = st["closes"][-1] if st["closes"] else 0.0
+    st["rsi"] = calc_rsi(list(st["closes"]), RSI_PERIOD)
+
+    # EMA init
+    if len(st["closes"]) >= EMA_SLOW:
+        # initialize with simple average for stability
+        fast_init = sum(list(st["closes"])[-EMA_FAST:]) / EMA_FAST
+        slow_init = sum(list(st["closes"])[-EMA_SLOW:]) / EMA_SLOW
+        st["prev_ema_fast"] = st["ema_fast"] or fast_init
+        st["prev_ema_slow"] = st["ema_slow"] or slow_init
+        st["ema_fast"] = st["prev_ema_fast"]
+        st["ema_slow"] = st["prev_ema_slow"]
+
+        # run EMA forward over last closes for accurate current EMA
+        ef = st["ema_fast"]
+        es = st["ema_slow"]
+        for p in list(st["closes"])[-EMA_SLOW:]:
+            ef = ema(ef, p, EMA_FAST)
+            es = ema(es, p, EMA_SLOW)
+        st["prev_ema_fast"] = st["ema_fast"]
+        st["prev_ema_slow"] = st["ema_slow"]
+        st["ema_fast"] = ef
+        st["ema_slow"] = es
+        st["warm"] = True
+
+    st["last_klines_ts"] = now
+    return st
+
+# ================== Scalp Strategy ==================
+def should_buy_scalp(st) -> bool:
+    if not st.get("warm"):
+        return False
+
+    ef = st["ema_fast"]
+    es = st["ema_slow"]
+    pef = st["prev_ema_fast"]
+    pes = st["prev_ema_slow"]
+    rsi = st["rsi"]
+    close = st["last_close"]
+
+    # Cross up: fast crosses above slow
+    cross_up = (pef <= pes) and (ef > es)
+
+    # Avoid buying in extreme zones
+    rsi_ok = (RSI_BUY_MIN <= rsi <= RSI_BUY_MAX)
+
+    # confirmation: close above fast EMA
+    momentum_ok = close >= ef
+
+    return cross_up and rsi_ok and momentum_ok
+
+def should_exit_early(st) -> bool:
+    if not st.get("warm"):
+        return False
+    if EXIT_ON_EMA_CROSSDOWN == "1":
+        pef = st["prev_ema_fast"]
+        pes = st["prev_ema_slow"]
+        ef = st["ema_fast"]
+        es = st["ema_slow"]
+        cross_down = (pef >= pes) and (ef < es)
+        if cross_down:
+            return True
+    if st["rsi"] >= EXIT_RSI_OVERBOUGHT:
+        return True
+    return False
+
+def pnl_pct(entry: float, price: float) -> float:
+    if entry <= 0:
+        return 0.0
+    return (price - entry) / entry * 100.0
+
 def safe_buy(client: Client, sym: str, price: float) -> bool:
     if MODE != "live":
         qty_paper = BUY_USDT / price
         POSITIONS[sym] = {"entry": price}
-        add_trade(sym, "BUY", qty_paper, price, "PAPER buy")
+        add_trade(sym, "BUY", qty_paper, price, "PAPER scalp buy")
         tg_send(f"🟢 PAPER BOUGHT {sym} qty={qty_paper:.6f}")
         return True
 
     step, min_qty, min_notional = get_lot_step(client, sym)
-
-    # هامش أمان للـ notional
+    # add buffer for fees/slippage
     if min_notional > 0 and BUY_USDT < (min_notional + 1.0):
-        print(f"BUY blocked {sym}: BUY_USDT={BUY_USDT} < minNotional+1={min_notional+1:.2f}")
         tg_send(f"⚠️ BUY blocked {sym}: BUY_USDT too small vs minNotional")
         return False
 
     usdt_free = get_balance_free(client, "USDT")
     if usdt_free < max(MIN_USDT_FREE_TO_BUY, BUY_USDT):
-        print(f"BUY blocked {sym}: not enough USDT free={usdt_free:.2f}")
         tg_send(f"⚠️ Not enough USDT to buy {sym}: free={usdt_free:.2f}")
         return False
 
-    tg_send(f"🟢 BUY {sym} amount={BUY_USDT:.2f} USDT (MODE=live)")
+    tg_send(f"🟢 SCALP BUY {sym} amount={BUY_USDT:.2f} USDT (MODE=live)")
     market_buy(client, sym, BUY_USDT)
     time.sleep(1)
 
     asset = base_asset(sym)
     qty_new = get_balance_free(client, asset)
     if qty_new <= 0:
-        print(f"BUY sent but qty still 0 for {sym}")
         tg_send(f"⚠️ BUY sent but balance not updated yet for {sym}")
         return False
 
     POSITIONS[sym] = {"entry": price}
-    add_trade(sym, "BUY", qty_new, price, "LIVE market buy")
-    tg_send(f"✅ BOUGHT {sym} qty={qty_new:.6f} (~{BUY_USDT}$)")
+    add_trade(sym, "BUY", qty_new, price, "LIVE scalp buy")
+    tg_send(f"✅ BOUGHT {sym} qty={qty_new:.6f}")
     return True
 
 def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
@@ -207,12 +324,10 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
     notional = sell_qty * price
 
     if sell_qty < min_qty:
-        print(f"SELL blocked {sym}: sell_qty<{min_qty} sell_qty={sell_qty}")
         tg_send(f"⚠️ SELL blocked {sym}: minQty")
         return False
 
     if min_notional > 0 and notional < min_notional:
-        print(f"SELL blocked {sym}: notional={notional:.4f} < minNotional={min_notional} (dust)")
         tg_send(f"⚠️ SELL blocked {sym}: dust notional<{min_notional}. Skipping.")
         return False
 
@@ -226,6 +341,7 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
     tg_send(f"✅ SOLD {sym} qty={sell_qty} notional={notional:.2f} ({reason})")
     return True
 
+# ================== Main ==================
 def main():
     init_db()
     print(f"🤖 BOT WORKER STARTED MODE={MODE}")
@@ -250,39 +366,21 @@ def main():
             open_pos = count_open_positions_wallet(client)
 
             for sym in SYMBOLS:
+                # refresh indicators (1m)
+                st_ind = refresh_indicators(client, sym)
+
                 price = get_price(client, sym)
                 asset = base_asset(sym)
                 qty_wallet = get_balance_free(client, asset)
-
                 step, min_qty, min_notional = get_lot_step(client, sym)
 
-                # Dust ignore: اعتبره لا يوجد صفقة حتى يسمح بالشراء
+                # dust ignore => treat as no position for buy logic
                 if DUST_IGNORE == "1" and is_dust(qty_wallet, price, min_notional):
                     qty_effective = 0.0
                 else:
                     qty_effective = qty_wallet
 
                 entry = float(POSITIONS.get(sym, {}).get("entry", 0.0))
-
-                # إذا في holding حقيقي وما عندنا entry -> احسب avg entry
-                if qty_effective > 0 and entry <= 0:
-                    avg = 0.0
-                    if MODE == "live":
-                        try:
-                            avg = get_avg_entry_from_trades(client, sym)
-                        except Exception as e:
-                            print("AvgEntry Error:", e)
-                            avg = 0.0
-
-                    if avg > 0:
-                        POSITIONS[sym] = {"entry": avg}
-                        entry = avg
-                        tg_send(f"📌 Holding {sym} qty={qty_effective:.6f}. Avg entry={avg:.6f}")
-                    else:
-                        POSITIONS[sym] = {"entry": price}
-                        entry = price
-                        tg_send(f"📌 Holding {sym} qty={qty_effective:.6f}. Entry unknown baseline={price:.6f}")
-
                 p = pnl_pct(entry, price) if qty_effective > 0 else 0.0
 
                 set_status(
@@ -293,29 +391,40 @@ def main():
                     pnl=round(p, 4),
                     position_qty=qty_effective,
                     position_entry=entry,
-                    last_action=f"tick usdt_free={usdt_free:.2f} open_pos={open_pos}",
+                    last_action=f"tick usdt_free={usdt_free:.2f} open_pos={open_pos} rsi={st_ind.get('rsi',0):.1f}",
                     last_error=""
                 )
 
-                # ============== SELL ==============
+                # ================== SELL ==================
                 if qty_effective > 0:
-                    if (p >= TP_PCT) and (not in_cooldown(sym)):
-                        tg_send(f"✅ TP reached {sym} pnl={p:.2f}% -> TRY SELL")
-                        if safe_sell(client, sym, price, f"TP {p:.2f}%"):
-                            mark_trade(sym)
-                            time.sleep(1)
-                        continue
+                    if not in_cooldown(sym):
+                        # hard TP/SL
+                        if p >= TP_PCT:
+                            tg_send(f"✅ TP hit {sym} pnl={p:.2f}% -> SELL (scalp)")
+                            if safe_sell(client, sym, price, f"SCALP TP {p:.2f}%"):
+                                mark_trade(sym)
+                                time.sleep(1)
+                            continue
 
-                    if (p <= -SL_PCT) and (not in_cooldown(sym)):
-                        tg_send(f"🛑 SL hit {sym} pnl={p:.2f}% -> TRY SELL")
-                        if safe_sell(client, sym, price, f"SL {p:.2f}%"):
-                            mark_trade(sym)
-                            time.sleep(1)
-                        continue
+                        if p <= -SL_PCT:
+                            tg_send(f"🛑 SL hit {sym} pnl={p:.2f}% -> SELL (scalp)")
+                            if safe_sell(client, sym, price, f"SCALP SL {p:.2f}%"):
+                                mark_trade(sym)
+                                time.sleep(1)
+                            continue
 
-                    continue  # holding
+                        # early exit if signal flips (EMA crossdown / RSI too high)
+                        if should_exit_early(st_ind):
+                            tg_send(f"⚡ Early exit {sym} pnl={p:.2f}% (signal flip) -> SELL")
+                            if safe_sell(client, sym, price, f"SCALP early-exit pnl={p:.2f}%"):
+                                mark_trade(sym)
+                                time.sleep(1)
+                            continue
 
-                # ============== BUY ==============
+                    # holding
+                    continue
+
+                # ================== BUY ==================
                 open_pos = count_open_positions_wallet(client)
                 if open_pos >= MAX_OPEN_POSITIONS:
                     continue
@@ -324,7 +433,12 @@ def main():
                 if in_cooldown(sym):
                     continue
 
-                if should_buy(sym, price):
+                # Buy only if scalping signal
+                if should_buy_scalp(st_ind):
+                    tg_send(
+                        f"🟢 SCALP SIGNAL {sym} | rsi={st_ind['rsi']:.1f} "
+                        f"ema9={st_ind['ema_fast']:.6f} ema21={st_ind['ema_slow']:.6f}"
+                    )
                     if safe_buy(client, sym, price):
                         mark_trade(sym)
                         usdt_free = get_balance_free(client, "USDT")
