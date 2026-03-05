@@ -3,8 +3,11 @@ import os, sqlite3, time
 DB_PATH = os.getenv("DB_PATH", "bot.sqlite3")
 
 def conn():
-    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     c.row_factory = sqlite3.Row
+    # safer for frequent writes
+    c.execute("PRAGMA journal_mode=WAL;")
+    c.execute("PRAGMA synchronous=NORMAL;")
     return c
 
 def init_db():
@@ -43,7 +46,8 @@ def init_db():
     c.close()
 
 def set_status(**kw):
-    init_db()
+    if not kw:
+        return
     fields = []
     vals = []
     for k, v in kw.items():
@@ -57,7 +61,6 @@ def set_status(**kw):
     c.close()
 
 def add_trade(symbol, side, qty, price, note=""):
-    init_db()
     c = conn()
     c.execute(
         "INSERT INTO trades(ts, symbol, side, qty, price, note) VALUES(?,?,?,?,?,?)",
@@ -67,14 +70,12 @@ def add_trade(symbol, side, qty, price, note=""):
     c.close()
 
 def get_status():
-    init_db()
     c = conn()
     row = c.execute("SELECT * FROM bot_status WHERE id=1").fetchone()
     c.close()
     return dict(row) if row else {}
 
 def last_trades(limit=50):
-    init_db()
     c = conn()
     rows = c.execute("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     c.close()
