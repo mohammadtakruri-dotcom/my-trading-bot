@@ -26,10 +26,13 @@ CHECK_INTERVAL = float(os.getenv("CHECK_INTERVAL", "20"))
 MIN_USDT_FREE_TO_BUY = float(os.getenv("MIN_USDT_FREE_TO_BUY", "3"))
 
 # Risk controls
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "2"))  # max symbols with positions (non-zero qty)
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "2"))  # max symbols with positions
 
 # Cooldown to avoid instant re-buy loops (seconds)
 COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "30"))
+
+# Prevent telegram spam for dust/minNotional warnings
+WARNED_DUST = set()
 
 # ================== Telegram ==================
 def tg_send(msg: str):
@@ -70,7 +73,6 @@ def get_lot_step(client: Client, symbol: str):
             step = float(f["stepSize"])
             min_qty = float(f["minQty"])
         if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
-            # sometimes it's NOTIONAL, sometimes MIN_NOTIONAL
             mn = f.get("minNotional") or f.get("notional") or f.get("minNotional", "0")
             try:
                 min_notional = float(mn)
@@ -108,10 +110,6 @@ def format_qty(q: float) -> str:
     return s if s else "0"
 
 def get_avg_entry_from_trades(client: Client, symbol: str, lookback: int = 500) -> float:
-    """
-    Compute average buy price from recent trades.
-    If no buys found, returns 0.
-    """
     trades = client.get_my_trades(symbol=symbol, limit=lookback)
     buy_qty = 0.0
     buy_cost = 0.0
@@ -125,7 +123,7 @@ def get_avg_entry_from_trades(client: Client, symbol: str, lookback: int = 500) 
 
 # ================== Strategy ==================
 def should_buy(symbol: str, price: float) -> bool:
-    # Placeholder: always True
+    # Placeholder: always True (you can replace later)
     return True
 
 def pnl_pct(entry: float, price: float) -> float:
@@ -138,9 +136,6 @@ POSITIONS = {}       # symbol -> {"qty": float, "entry": float}
 LAST_TRADE_TS = {}   # symbol -> int timestamp (cooldown)
 
 def load_positions_from_wallet(client: Client):
-    """
-    Detect existing holdings (manual buys).
-    """
     for sym in SYMBOLS:
         asset = base_asset(sym)
         qty = get_balance_free(client, asset)
@@ -157,6 +152,16 @@ def in_cooldown(sym: str) -> bool:
 
 def mark_trade(sym: str):
     LAST_TRADE_TS[sym] = int(time.time())
+
+def warn_dust_once(sym: str, notional: float, min_notional: float, qty: float, price: float):
+    key = f"{sym}-dust"
+    if key in WARNED_DUST:
+        return
+    WARNED_DUST.add(key)
+    msg = f"⚠️ Can't trade {sym}: notional {notional:.4f} < minNotional {min_notional}. Position is too small (dust)."
+    print(msg)
+    tg_send(msg)
+    add_trade(sym, "INFO", qty, price, f"DUST notional {notional:.4f} < {min_notional}")
 
 def main():
     init_db()
@@ -192,7 +197,6 @@ def main():
                         entry = avg
                         tg_send(f"📌 Detected holding {sym} qty={qty:.6f}. Avg entry={avg:.6f}")
                     else:
-                        # fallback baseline
                         POSITIONS[sym]["entry"] = price
                         entry = price
                         tg_send(f"📌 Detected holding {sym} qty={qty:.6f}. Entry unknown, baseline={price:.6f}")
@@ -226,10 +230,13 @@ def main():
                             notional = sell_qty * price
 
                             if sell_qty < min_qty:
-                                raise RuntimeError(f"{sym} sell_qty<{min_qty}. qty={sell_qty}")
+                                # qty too small, treat as dust and skip
+                                warn_dust_once(sym, notional, min_notional or 0.0, qty, price)
+                                continue
 
                             if min_notional > 0 and notional < min_notional:
-                                raise RuntimeError(f"{sym} notional<{min_notional}. notional={notional}")
+                                warn_dust_once(sym, notional, min_notional, qty, price)
+                                continue
 
                             market_sell(client, sym, sell_qty)
                             add_trade(sym, "SELL", sell_qty, price, f"TP {p:.2f}%")
@@ -257,10 +264,12 @@ def main():
                             notional = sell_qty * price
 
                             if sell_qty < min_qty:
-                                raise RuntimeError(f"{sym} sell_qty<{min_qty}. qty={sell_qty}")
+                                warn_dust_once(sym, notional, min_notional or 0.0, qty, price)
+                                continue
 
                             if min_notional > 0 and notional < min_notional:
-                                raise RuntimeError(f"{sym} notional<{min_notional}. notional={notional}")
+                                warn_dust_once(sym, notional, min_notional, qty, price)
+                                continue
 
                             market_sell(client, sym, sell_qty)
                             add_trade(sym, "SELL", sell_qty, price, f"SL {p:.2f}%")
@@ -300,22 +309,21 @@ def main():
                     tg_send(msg)
 
                     if MODE == "live":
-                        # Check min notional for buy amount (approx)
                         step, min_qty, min_notional = get_lot_step(client, sym)
                         if min_notional > 0 and BUY_USDT < min_notional:
-                            raise RuntimeError(f"{sym} BUY_USDT<{min_notional} minNotional. BUY_USDT={BUY_USDT}")
+                            # Can't buy because BUY_USDT too small -> warn once and skip
+                            warn_dust_once(sym, BUY_USDT, min_notional, 0.0, price)
+                            continue
 
                         market_buy(client, sym, BUY_USDT)
 
                         asset = base_asset(sym)
                         qty_new = get_balance_free(client, asset)
 
-                        # if qty_new too small, still store it but note
                         POSITIONS[sym] = {"qty": qty_new, "entry": price}
                         add_trade(sym, "BUY", qty_new, price, "LIVE market buy")
                         mark_trade(sym)
 
-                        # refresh USDT after buy
                         usdt_free = get_balance_free(client, "USDT")
                     else:
                         qty_paper = BUY_USDT / price
