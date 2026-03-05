@@ -19,52 +19,43 @@ SYMBOLS = os.getenv("SYMBOLS", os.getenv("SYMBOL", "BTCUSDT")).strip()
 SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 
 BUY_USDT = float(os.getenv("BUY_USDT", "10"))
-TP_PCT = float(os.getenv("TP_PCT", "2"))
-SL_PCT = float(os.getenv("SL_PCT", "1"))
+TP_PCT = float(os.getenv("TP_PCT", "2"))  # take profit %
+SL_PCT = float(os.getenv("SL_PCT", "1"))  # stop loss %
 CHECK_INTERVAL = float(os.getenv("CHECK_INTERVAL", "20"))
 
 MIN_USDT_FREE_TO_BUY = float(os.getenv("MIN_USDT_FREE_TO_BUY", "12"))
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "2"))
-COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "60"))  # عملي: دقيقة
+COOLDOWN_SEC = int(os.getenv("COOLDOWN_SEC", "60"))
 
-# Dust behavior (عملي)
-DUST_IGNORE = os.getenv("DUST_IGNORE", "1").strip()          # 1 = اعتبر الـ dust كأنه لا يوجد صفقة (يسمح بالشراء)
-DUST_IGNORE_BUFFER = float(os.getenv("DUST_IGNORE_BUFFER", "0.3"))  # هامش أمان تحت minNotional
+# عملي: تجاهل dust (حتى لا يمنع الشراء ولا يسبب محاولة بيع متكررة)
+DUST_IGNORE = os.getenv("DUST_IGNORE", "1").strip()  # 1 = ignore dust
+DUST_IGNORE_BUFFER = float(os.getenv("DUST_IGNORE_BUFFER", "0.3"))  # buffer under minNotional
 
-# Auto top-up (اختياري)
-AUTO_TOPUP_DUST = os.getenv("AUTO_TOPUP_DUST", "0").strip()  # عملياً: 0 أفضل حتى لا يستهلك USDT
-DUST_SELL_TARGET_USDT = float(os.getenv("DUST_SELL_TARGET_USDT", "7"))
-DUST_TOPUP_MAX_USDT = float(os.getenv("DUST_TOPUP_MAX_USDT", "20"))
-DUST_TOPUP_COOLDOWN_SEC = int(os.getenv("DUST_TOPUP_COOLDOWN_SEC", "900"))
+# Debug / Heartbeat
+HEARTBEAT_SEC = int(os.getenv("HEARTBEAT_SEC", "30"))
 
-# ================== Anti-spam ==================
-LAST_NOTICE_TS = {}
-NOTICE_COOLDOWN = 45
-
-def notice(key: str, msg: str):
-    now = int(time.time())
-    last = int(LAST_NOTICE_TS.get(key, 0))
-    if now - last < NOTICE_COOLDOWN:
-        return
-    LAST_NOTICE_TS[key] = now
-    print(msg)
-    tg_send(msg)
-
-# ================== Telegram ==================
+# ================== Telegram (DEBUG) ==================
 def tg_send(msg: str):
+    # هذه الدالة تطبع سبب عدم إرسال تلجرام (مهم عندك الآن)
+    print("TG_SEND attempt. token?", bool(TG_TOKEN), "id?", TG_ID)
     if not TG_TOKEN or not TG_ID:
+        print("TG missing TG_TOKEN/TG_ID")
         return
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, timeout=10, data={"chat_id": TG_ID, "text": msg})
-    except Exception:
-        pass
+        r = requests.post(url, timeout=15, data={"chat_id": TG_ID, "text": msg})
+        print("TG status:", r.status_code, "resp:", (r.text or "")[:200])
+    except Exception as e:
+        print("TG exception:", e)
 
 # ================== Binance Helpers ==================
 def make_client():
     if not BINANCE_API_KEY or not BINANCE_API_SECRET:
         raise RuntimeError("Missing BINANCE_API_KEY / BINANCE_API_SECRET")
-    return Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+    c = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+    # اختبار سريع (لو علق هنا ستعرف)
+    c.ping()
+    return c
 
 def get_price(client: Client, symbol: str) -> float:
     return float(client.get_symbol_ticker(symbol=symbol)["price"])
@@ -106,13 +97,17 @@ def format_qty(q: float) -> str:
 
 def market_buy(client: Client, symbol: str, usdt_amount: float):
     return client.create_order(
-        symbol=symbol, side="BUY", type="MARKET",
+        symbol=symbol,
+        side="BUY",
+        type="MARKET",
         quoteOrderQty=f"{usdt_amount:.2f}",
     )
 
 def market_sell(client: Client, symbol: str, qty: float):
     return client.create_order(
-        symbol=symbol, side="SELL", type="MARKET",
+        symbol=symbol,
+        side="SELL",
+        type="MARKET",
         quantity=format_qty(qty),
     )
 
@@ -130,7 +125,7 @@ def get_avg_entry_from_trades(client: Client, symbol: str, lookback: int = 500) 
 
 # ================== Strategy ==================
 def should_buy(symbol: str, price: float) -> bool:
-    # عملي: الآن نشتري فقط عند عدم وجود صفقة (وسيتم ذلك في المنطق أدناه)
+    # Placeholder: always buy when allowed (يمكنك تطويرها لاحقًا)
     return True
 
 def pnl_pct(entry: float, price: float) -> float:
@@ -138,10 +133,14 @@ def pnl_pct(entry: float, price: float) -> float:
         return 0.0
     return (price - entry) / entry * 100.0
 
+def is_dust(qty: float, price: float, min_notional: float) -> bool:
+    if qty <= 0 or min_notional <= 0:
+        return False
+    return (qty * price) < (min_notional - DUST_IGNORE_BUFFER)
+
 # ================== State ==================
-POSITIONS = {}      # symbol -> {"qty": float, "entry": float}
-LAST_TRADE_TS = {}  # symbol -> ts
-LAST_TOPUP_TS = {}  # symbol -> ts
+POSITIONS = {}       # sym -> {"entry": float}
+LAST_TRADE_TS = {}   # sym -> ts
 
 def in_cooldown(sym: str) -> bool:
     last_ts = int(LAST_TRADE_TS.get(sym, 0) or 0)
@@ -150,8 +149,7 @@ def in_cooldown(sym: str) -> bool:
 def mark_trade(sym: str):
     LAST_TRADE_TS[sym] = int(time.time())
 
-def count_open_positions(client: Client) -> int:
-    # يعتمد على المحفظة، مش الذاكرة
+def count_open_positions_wallet(client: Client) -> int:
     cnt = 0
     for sym in SYMBOLS:
         asset = base_asset(sym)
@@ -160,40 +158,26 @@ def count_open_positions(client: Client) -> int:
             cnt += 1
     return cnt
 
-def can_topup(sym: str) -> bool:
-    last_ts = int(LAST_TOPUP_TS.get(sym, 0) or 0)
-    return (time.time() - last_ts) > DUST_TOPUP_COOLDOWN_SEC
-
-def mark_topup(sym: str):
-    LAST_TOPUP_TS[sym] = int(time.time())
-
-def is_dust(qty: float, price: float, min_notional: float) -> bool:
-    if qty <= 0 or min_notional <= 0:
-        return False
-    notional = qty * price
-    return notional < (min_notional - DUST_IGNORE_BUFFER)
-
 def safe_buy(client: Client, sym: str, price: float) -> bool:
     if MODE != "live":
-        # paper buy
         qty_paper = BUY_USDT / price
-        POSITIONS[sym] = {"qty": qty_paper, "entry": price}
+        POSITIONS[sym] = {"entry": price}
         add_trade(sym, "BUY", qty_paper, price, "PAPER buy")
         tg_send(f"🟢 PAPER BOUGHT {sym} qty={qty_paper:.6f}")
         return True
 
     step, min_qty, min_notional = get_lot_step(client, sym)
 
-    # هامش أمان: لازم BUY_USDT يكون >= minNotional + 1
+    # هامش أمان للـ notional
     if min_notional > 0 and BUY_USDT < (min_notional + 1.0):
-        notice(f"{sym}-buy-too-small",
-               f"⚠️ BUY blocked {sym}: BUY_USDT={BUY_USDT} < minNotional+1={min_notional+1:.2f}")
+        print(f"BUY blocked {sym}: BUY_USDT={BUY_USDT} < minNotional+1={min_notional+1:.2f}")
+        tg_send(f"⚠️ BUY blocked {sym}: BUY_USDT too small vs minNotional")
         return False
 
     usdt_free = get_balance_free(client, "USDT")
     if usdt_free < max(MIN_USDT_FREE_TO_BUY, BUY_USDT):
-        notice(f"{sym}-no-usdt",
-               f"⚠️ Not enough USDT to buy {sym}: free={usdt_free:.2f}")
+        print(f"BUY blocked {sym}: not enough USDT free={usdt_free:.2f}")
+        tg_send(f"⚠️ Not enough USDT to buy {sym}: free={usdt_free:.2f}")
         return False
 
     tg_send(f"🟢 BUY {sym} amount={BUY_USDT:.2f} USDT (MODE=live)")
@@ -203,11 +187,11 @@ def safe_buy(client: Client, sym: str, price: float) -> bool:
     asset = base_asset(sym)
     qty_new = get_balance_free(client, asset)
     if qty_new <= 0:
-        notice(f"{sym}-buy-no-fill",
-               f"⚠️ BUY sent but balance not updated yet for {sym}.")
+        print(f"BUY sent but qty still 0 for {sym}")
+        tg_send(f"⚠️ BUY sent but balance not updated yet for {sym}")
         return False
 
-    POSITIONS[sym] = {"qty": qty_new, "entry": price}
+    POSITIONS[sym] = {"entry": price}
     add_trade(sym, "BUY", qty_new, price, "LIVE market buy")
     tg_send(f"✅ BOUGHT {sym} qty={qty_new:.6f} (~{BUY_USDT}$)")
     return True
@@ -222,21 +206,19 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
     sell_qty = round_step(qty_wallet, step)
     notional = sell_qty * price
 
-    # إذا Dust: عملياً نتجاهله (ولا top-up)
-    if min_notional > 0 and notional < min_notional:
-        notice(f"{sym}-dust-skip",
-               f"⚠️ SELL blocked {sym}: notional={notional:.4f} < minNotional={min_notional} (dust). Skipping.")
+    if sell_qty < min_qty:
+        print(f"SELL blocked {sym}: sell_qty<{min_qty} sell_qty={sell_qty}")
+        tg_send(f"⚠️ SELL blocked {sym}: minQty")
         return False
 
-    if sell_qty < min_qty:
-        notice(f"{sym}-minqty",
-               f"⚠️ SELL blocked {sym}: sell_qty={sell_qty} < minQty={min_qty}")
+    if min_notional > 0 and notional < min_notional:
+        print(f"SELL blocked {sym}: notional={notional:.4f} < minNotional={min_notional} (dust)")
+        tg_send(f"⚠️ SELL blocked {sym}: dust notional<{min_notional}. Skipping.")
         return False
 
     if MODE != "live":
         add_trade(sym, "SELL", sell_qty, price, f"PAPER {reason}")
         tg_send(f"✅ PAPER SOLD {sym} qty={sell_qty} ({reason})")
-        POSITIONS[sym]["qty"] = 0.0
         return True
 
     market_sell(client, sym, sell_qty)
@@ -246,55 +228,62 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
 
 def main():
     init_db()
+    print(f"🤖 BOT WORKER STARTED MODE={MODE}")
     tg_send(f"🤖 Bot worker started. MODE={MODE}")
-    print("🤖 BOT WORKER STARTED MODE=", MODE)
 
+    print("✅ INIT: creating Binance client (ping)...")
     client = make_client()
+    print("✅ INIT: client ok, entering main loop")
+    tg_send("✅ TEST: Worker is running now.")
+
+    last_hb = 0
 
     while True:
         try:
+            now = int(time.time())
+            if now - last_hb >= HEARTBEAT_SEC:
+                last_hb = now
+                usdt_free_dbg = get_balance_free(client, "USDT")
+                print(f"💓 HEARTBEAT {now} | USDT_free={usdt_free_dbg:.2f} | symbols={','.join(SYMBOLS)}")
+
             usdt_free = get_balance_free(client, "USDT")
+            open_pos = count_open_positions_wallet(client)
 
             for sym in SYMBOLS:
                 price = get_price(client, sym)
                 asset = base_asset(sym)
+                qty_wallet = get_balance_free(client, asset)
 
-                # ✅ تحديث الكمية من المحفظة كل مرة
-                wallet_qty = get_balance_free(client, asset)
                 step, min_qty, min_notional = get_lot_step(client, sym)
 
-                # entry tracking
-                pos = POSITIONS.get(sym, {"qty": 0.0, "entry": 0.0})
-                entry = float(pos.get("entry", 0.0))
-
-                # إذا عندي holding لكن Dust و DUST_IGNORE=1 => اعتبره صفر حتى يسمح بالشراء
-                if DUST_IGNORE == "1" and is_dust(wallet_qty, price, min_notional):
-                    POSITIONS[sym] = {"qty": 0.0, "entry": 0.0}
-                    wallet_qty_effective = 0.0
+                # Dust ignore: اعتبره لا يوجد صفقة حتى يسمح بالشراء
+                if DUST_IGNORE == "1" and is_dust(qty_wallet, price, min_notional):
+                    qty_effective = 0.0
                 else:
-                    POSITIONS.setdefault(sym, {"qty": wallet_qty, "entry": entry})
-                    POSITIONS[sym]["qty"] = wallet_qty
-                    wallet_qty_effective = wallet_qty
+                    qty_effective = qty_wallet
 
-                # إذا holding حقيقي و entry غير معروف
-                if wallet_qty_effective > 0 and entry <= 0:
+                entry = float(POSITIONS.get(sym, {}).get("entry", 0.0))
+
+                # إذا في holding حقيقي وما عندنا entry -> احسب avg entry
+                if qty_effective > 0 and entry <= 0:
                     avg = 0.0
                     if MODE == "live":
                         try:
                             avg = get_avg_entry_from_trades(client, sym)
-                        except Exception:
+                        except Exception as e:
+                            print("AvgEntry Error:", e)
                             avg = 0.0
-                    if avg > 0:
-                        POSITIONS[sym]["entry"] = avg
-                        entry = avg
-                        tg_send(f"📌 Holding {sym} qty={wallet_qty_effective:.6f}. Avg entry={avg:.6f}")
-                    else:
-                        POSITIONS[sym]["entry"] = price
-                        entry = price
-                        tg_send(f"📌 Holding {sym} qty={wallet_qty_effective:.6f}. Entry unknown baseline={price:.6f}")
 
-                p = pnl_pct(entry, price) if wallet_qty_effective > 0 else 0.0
-                open_pos = count_open_positions(client)
+                    if avg > 0:
+                        POSITIONS[sym] = {"entry": avg}
+                        entry = avg
+                        tg_send(f"📌 Holding {sym} qty={qty_effective:.6f}. Avg entry={avg:.6f}")
+                    else:
+                        POSITIONS[sym] = {"entry": price}
+                        entry = price
+                        tg_send(f"📌 Holding {sym} qty={qty_effective:.6f}. Entry unknown baseline={price:.6f}")
+
+                p = pnl_pct(entry, price) if qty_effective > 0 else 0.0
 
                 set_status(
                     mode=MODE,
@@ -302,32 +291,32 @@ def main():
                     symbol=sym,
                     price=price,
                     pnl=round(p, 4),
-                    position_qty=wallet_qty_effective,
+                    position_qty=qty_effective,
                     position_entry=entry,
                     last_action=f"tick usdt_free={usdt_free:.2f} open_pos={open_pos}",
                     last_error=""
                 )
 
-                # ---------- SELL ----------
-                if wallet_qty_effective > 0:
-                    if p >= TP_PCT and not in_cooldown(sym):
+                # ============== SELL ==============
+                if qty_effective > 0:
+                    if (p >= TP_PCT) and (not in_cooldown(sym)):
                         tg_send(f"✅ TP reached {sym} pnl={p:.2f}% -> TRY SELL")
                         if safe_sell(client, sym, price, f"TP {p:.2f}%"):
                             mark_trade(sym)
                             time.sleep(1)
                         continue
 
-                    if p <= -SL_PCT and not in_cooldown(sym):
+                    if (p <= -SL_PCT) and (not in_cooldown(sym)):
                         tg_send(f"🛑 SL hit {sym} pnl={p:.2f}% -> TRY SELL")
                         if safe_sell(client, sym, price, f"SL {p:.2f}%"):
                             mark_trade(sym)
                             time.sleep(1)
                         continue
 
-                    # holding
-                    continue
+                    continue  # holding
 
-                # ---------- BUY ----------
+                # ============== BUY ==============
+                open_pos = count_open_positions_wallet(client)
                 if open_pos >= MAX_OPEN_POSITIONS:
                     continue
                 if usdt_free < MIN_USDT_FREE_TO_BUY:
