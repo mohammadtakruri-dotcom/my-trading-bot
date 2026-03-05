@@ -1,85 +1,81 @@
-import os, sqlite3, threading, time
+import os, sqlite3, time
 
-DB_PATH = os.getenv("SQLITE_PATH", "bot.db")
-_lock = threading.Lock()
+DB_PATH = os.getenv("DB_PATH", "bot.sqlite3")
 
-def _conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+def conn():
+    c = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    return c
 
 def init_db():
-    with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS bot_status (
-            id INTEGER PRIMARY KEY CHECK (id=1),
-            mode TEXT,
-            updated_at TEXT,
-            notes TEXT,
-            last_error TEXT
-        )
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS positions (
-            symbol TEXT PRIMARY KEY,
-            entry_price REAL,
-            qty REAL,
-            updated_at TEXT
-        )
-        """)
-        cur.execute("INSERT OR IGNORE INTO bot_status (id, mode, updated_at, notes, last_error) VALUES (1,'unknown',datetime('now'),'','')")
-        c.commit()
-        c.close()
+    c = conn()
+    cur = c.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS bot_status(
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        mode TEXT,
+        last_heartbeat INTEGER,
+        symbol TEXT,
+        price REAL,
+        pnl REAL,
+        position_qty REAL,
+        position_entry REAL,
+        last_action TEXT,
+        last_error TEXT
+    )
+    """)
+    cur.execute("""
+    INSERT OR IGNORE INTO bot_status(id, mode, last_heartbeat, symbol, price, pnl, position_qty, position_entry, last_action, last_error)
+    VALUES(1, 'paper', 0, '', 0, 0, 0, 0, '', '')
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS trades(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER,
+        symbol TEXT,
+        side TEXT,
+        qty REAL,
+        price REAL,
+        note TEXT
+    )
+    """)
+    c.commit()
+    c.close()
 
-def set_status(mode: str, notes: str = "", last_error: str = ""):
-    with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("""
-            UPDATE bot_status
-            SET mode=?, updated_at=datetime('now'), notes=?, last_error=?
-            WHERE id=1
-        """, (mode, notes, last_error))
-        c.commit()
-        c.close()
+def set_status(**kw):
+    init_db()
+    fields = []
+    vals = []
+    for k, v in kw.items():
+        fields.append(f"{k}=?")
+        vals.append(v)
+    vals.append(1)
+    sql = f"UPDATE bot_status SET {', '.join(fields)} WHERE id=?"
+    c = conn()
+    c.execute(sql, vals)
+    c.commit()
+    c.close()
 
-def upsert_position(symbol: str, entry_price: float, qty: float):
-    with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("""
-            INSERT INTO positions(symbol, entry_price, qty, updated_at)
-            VALUES(?,?,?,datetime('now'))
-            ON CONFLICT(symbol) DO UPDATE SET
-              entry_price=excluded.entry_price,
-              qty=excluded.qty,
-              updated_at=datetime('now')
-        """, (symbol, entry_price, qty))
-        c.commit()
-        c.close()
-
-def delete_position(symbol: str):
-    with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
-        c.commit()
-        c.close()
+def add_trade(symbol, side, qty, price, note=""):
+    init_db()
+    c = conn()
+    c.execute(
+        "INSERT INTO trades(ts, symbol, side, qty, price, note) VALUES(?,?,?,?,?,?)",
+        (int(time.time()), symbol, side, float(qty), float(price), note),
+    )
+    c.commit()
+    c.close()
 
 def get_status():
-    with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("SELECT mode, updated_at, notes, last_error FROM bot_status WHERE id=1")
-        row = cur.fetchone()
-        c.close()
-        return row
+    init_db()
+    c = conn()
+    row = c.execute("SELECT * FROM bot_status WHERE id=1").fetchone()
+    c.close()
+    return dict(row) if row else {}
 
-def get_positions():
-    with _lock:
-        c = _conn()
-        cur = c.cursor()
-        cur.execute("SELECT symbol, entry_price, qty, updated_at FROM positions ORDER BY symbol")
-        rows = cur.fetchall()
-        c.close()
-        return rows
+def last_trades(limit=50):
+    init_db()
+    c = conn()
+    rows = c.execute("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    c.close()
+    return [dict(r) for r in rows]
