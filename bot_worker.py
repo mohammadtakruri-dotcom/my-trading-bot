@@ -58,7 +58,7 @@ LIVE_TRADING = getenv_str("LIVE_TRADING", "0")
 MODE = "live" if (ENABLE_TRADING == "1" or LIVE_TRADING == "1") else "paper"
 
 SYMBOLS = getenv_str("SYMBOLS", getenv_str("SYMBOL", "BTCUSDT"))
-SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
+BASE_SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 
 # ================== Strategy Params ==================
 BUY_USDT = getenv_float("BUY_USDT", 12.0)
@@ -113,6 +113,29 @@ MANAGE_UNKNOWN_ENTRY = getenv_str("MANAGE_UNKNOWN_ENTRY", "1")  # 1=manage with 
 
 # Allow small early exit profit
 EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.05)
+
+# ================== Top Gainers Filter ==================
+USE_TOP_GAINERS = getenv_str("USE_TOP_GAINERS", "1")
+TOP_GAINERS_LIMIT = getenv_int("TOP_GAINERS_LIMIT", 6)
+TOP_GAINERS_REFRESH_SEC = getenv_int("TOP_GAINERS_REFRESH_SEC", 3600)
+
+MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 5000000.0)
+MIN_24H_CHANGE_PCT = getenv_float("MIN_24H_CHANGE_PCT", 3.0)
+MAX_24H_CHANGE_PCT = getenv_float("MAX_24H_CHANGE_PCT", 18.0)
+
+# لا نشتري عملات سعرها صغير جدًا جدًا أو فيها مخاطرة مبالغ
+MIN_LAST_PRICE = getenv_float("MIN_LAST_PRICE", 0.0001)
+
+# استبعاد عملات لا تريدها
+EXCLUDED_SYMBOLS = set(
+    s.strip().upper()
+    for s in getenv_str("EXCLUDED_SYMBOLS", "").split(",")
+    if s.strip()
+)
+
+# دمج الأساسي مع الديناميكي
+DYNAMIC_SYMBOLS = []
+LAST_GAINERS_REFRESH = 0
 
 
 # ================== Telegram ==================
@@ -226,6 +249,83 @@ def avg_fill_price_from_order(order) -> float:
         return 0.0
 
 
+def get_active_symbols():
+    merged = []
+    seen = set()
+
+    for sym in BASE_SYMBOLS + DYNAMIC_SYMBOLS:
+        if sym not in seen:
+            seen.add(sym)
+            merged.append(sym)
+
+    return merged
+
+
+def refresh_top_gainers(client: Client):
+    global DYNAMIC_SYMBOLS, LAST_GAINERS_REFRESH
+
+    if USE_TOP_GAINERS != "1":
+        return
+
+    now = int(time.time())
+    if (now - LAST_GAINERS_REFRESH) < TOP_GAINERS_REFRESH_SEC and DYNAMIC_SYMBOLS:
+        return
+
+    try:
+        tickers = client.get_ticker()
+        candidates = []
+
+        for t in tickers:
+            try:
+                sym = str(t.get("symbol", "")).upper()
+                if not sym.endswith("USDT"):
+                    continue
+                if sym in EXCLUDED_SYMBOLS:
+                    continue
+                if sym in BASE_SYMBOLS:
+                    continue
+
+                change_pct = float(t.get("priceChangePercent", 0) or 0)
+                quote_volume = float(t.get("quoteVolume", 0) or 0)
+                last_price = float(t.get("lastPrice", 0) or 0)
+            except Exception:
+                continue
+
+            if last_price < MIN_LAST_PRICE:
+                continue
+
+            if quote_volume < MIN_24H_QUOTE_VOLUME:
+                continue
+
+            if change_pct < MIN_24H_CHANGE_PCT:
+                continue
+
+            if change_pct > MAX_24H_CHANGE_PCT:
+                continue
+
+            try:
+                info = client.get_symbol_info(sym)
+                if not info or info.get("status") != "TRADING":
+                    continue
+            except Exception:
+                continue
+
+            candidates.append((sym, change_pct, quote_volume))
+
+        candidates.sort(key=lambda x: (x[1], x[2]), reverse=True)
+        selected = [x[0] for x in candidates[:TOP_GAINERS_LIMIT]]
+
+        DYNAMIC_SYMBOLS = selected
+        LAST_GAINERS_REFRESH = now
+
+        msg = f"🔥 Top Gainers refreshed: {', '.join(DYNAMIC_SYMBOLS) if DYNAMIC_SYMBOLS else 'none'}"
+        print(msg)
+        tg_send(msg)
+
+    except Exception as e:
+        print(f"⚠️ refresh_top_gainers failed: {e}")
+
+
 # ================== Indicators ==================
 def ema(prev_ema: float, price: float, period: int) -> float:
     k = 2 / (period + 1)
@@ -287,7 +387,7 @@ def is_dust(qty: float, price: float, min_notional: float) -> bool:
 
 def count_open_positions_wallet(client: Client) -> int:
     cnt = 0
-    for sym in SYMBOLS:
+    for sym in get_active_symbols():
         try:
             asset = base_asset(sym)
             qty = get_balance_free(client, asset)
@@ -441,7 +541,7 @@ def sync_wallet_positions(client: Client):
 
     synced = []
 
-    for sym in SYMBOLS:
+    for sym in get_active_symbols():
         try:
             asset = base_asset(sym)
             qty = get_balance_free(client, asset)
@@ -584,6 +684,7 @@ def main():
     client = make_client()
     tg_send("✅ TEST: Worker is running now.")
 
+    refresh_top_gainers(client)
     sync_wallet_positions(client)
 
     last_hb = 0
@@ -592,15 +693,18 @@ def main():
         try:
             now = int(time.time())
 
+            refresh_top_gainers(client)
+            active_symbols = get_active_symbols()
+
             if now - last_hb >= HEARTBEAT_SEC:
                 last_hb = now
                 usdt_free_dbg = get_balance_free(client, "USDT")
-                print(f"💓 HEARTBEAT {now} | USDT_free={usdt_free_dbg:.2f} | symbols={','.join(SYMBOLS)}")
+                print(f"💓 HEARTBEAT {now} | USDT_free={usdt_free_dbg:.2f} | symbols={','.join(active_symbols)}")
 
             usdt_free = get_balance_free(client, "USDT")
             open_pos = count_open_positions_wallet(client)
 
-            for sym in SYMBOLS:
+            for sym in active_symbols:
                 st_ind = refresh_indicators(client, sym)
 
                 price = get_price(client, sym)
