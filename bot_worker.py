@@ -57,24 +57,25 @@ ENABLE_TRADING = getenv_str("ENABLE_TRADING", "0")
 LIVE_TRADING = getenv_str("LIVE_TRADING", "0")
 MODE = "live" if (ENABLE_TRADING == "1" or LIVE_TRADING == "1") else "paper"
 
-SYMBOLS = getenv_str("SYMBOLS", getenv_str("SYMBOL", "BTCUSDT"))
-BASE_SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
+DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT"
+SYMBOLS = getenv_str("SYMBOLS", DEFAULT_SYMBOLS)
+SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 
 # ================== Strategy Params ==================
 BUY_USDT = getenv_float("BUY_USDT", 12.0)
 
-TP_PCT = getenv_float("TP_PCT", 0.80)     # gross TP
-SL_PCT = getenv_float("SL_PCT", 0.70)     # gross SL
+TP_PCT = getenv_float("TP_PCT", 1.20)      # gross TP
+SL_PCT = getenv_float("SL_PCT", 0.90)      # gross SL
 CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 10.0)
 
 MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 15.0)
 MAX_OPEN_POSITIONS = getenv_int("MAX_OPEN_POSITIONS", 2)
-COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 45)
+COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 60)
 
 # Fees / slippage
 FEE_PCT = getenv_float("FEE_PCT", 0.10)
-SLIPPAGE_PCT = getenv_float("SLIPPAGE_PCT", 0.15)
-MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.25)
+SLIPPAGE_PCT = getenv_float("SLIPPAGE_PCT", 0.12)
+MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.40)
 
 BREAKEVEN_PCT = (2.0 * FEE_PCT) + SLIPPAGE_PCT
 REQUIRED_GROSS_TP_PCT = max(TP_PCT, BREAKEVEN_PCT + MIN_NET_PROFIT_PCT)
@@ -85,57 +86,45 @@ DUST_IGNORE_BUFFER = getenv_float("DUST_IGNORE_BUFFER", 0.30)
 
 # Heartbeat
 HEARTBEAT_SEC = getenv_int("HEARTBEAT_SEC", 30)
-DEBUG_EVERY_SEC = getenv_int("DEBUG_EVERY_SEC", 120)
+DEBUG_EVERY_SEC = getenv_int("DEBUG_EVERY_SEC", 180)
 
-# Indicators
+# Indicators - Entry timeframe
 KLINES_INTERVAL = getenv_str("KLINES_INTERVAL", "1m")
-KLINES_LIMIT = getenv_int("KLINES_LIMIT", 80)
+KLINES_LIMIT = getenv_int("KLINES_LIMIT", 120)
 KLINES_REFRESH_SEC = getenv_int("KLINES_REFRESH_SEC", 20)
 
-EMA_FAST = getenv_int("EMA_FAST", 5)
-EMA_SLOW = getenv_int("EMA_SLOW", 13)
+EMA_FAST = getenv_int("EMA_FAST", 9)
+EMA_SLOW = getenv_int("EMA_SLOW", 21)
 RSI_PERIOD = getenv_int("RSI_PERIOD", 14)
 
-RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 45.0)
-RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 72.0)
+RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 50.0)
+RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 65.0)
 
 EXIT_ON_EMA_CROSSDOWN = getenv_str("EXIT_ON_EMA_CROSSDOWN", "1")
-EXIT_RSI_OVERBOUGHT = getenv_float("EXIT_RSI_OVERBOUGHT", 78.0)
+EXIT_RSI_OVERBOUGHT = getenv_float("EXIT_RSI_OVERBOUGHT", 74.0)
+
+# Trend filter - Higher timeframe
+TREND_INTERVAL = getenv_str("TREND_INTERVAL", "5m")
+TREND_LIMIT = getenv_int("TREND_LIMIT", 220)
+TREND_EMA = getenv_int("TREND_EMA", 200)
+TREND_REFRESH_SEC = getenv_int("TREND_REFRESH_SEC", 60)
+REQUIRE_TREND_FILTER = getenv_str("REQUIRE_TREND_FILTER", "1")
+
+# Market quality filters
+MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.18)
+MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 50000000.0)
 
 # Trailing
 ENABLE_TRAILING = getenv_str("ENABLE_TRAILING", "1")
-TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.20)
+TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.35)
 TRAILING_GIVEBACK_PCT = getenv_float("TRAILING_GIVEBACK_PCT", 0.20)
 
 # Wallet sync
 SYNC_EXISTING_POSITIONS = getenv_str("SYNC_EXISTING_POSITIONS", "1")
-MANAGE_UNKNOWN_ENTRY = getenv_str("MANAGE_UNKNOWN_ENTRY", "1")  # 1=manage with current price if unknown
+MANAGE_UNKNOWN_ENTRY = getenv_str("MANAGE_UNKNOWN_ENTRY", "1")
 
-# Allow small early exit profit
-EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.05)
-
-# ================== Top Gainers Filter ==================
-USE_TOP_GAINERS = getenv_str("USE_TOP_GAINERS", "1")
-TOP_GAINERS_LIMIT = getenv_int("TOP_GAINERS_LIMIT", 6)
-TOP_GAINERS_REFRESH_SEC = getenv_int("TOP_GAINERS_REFRESH_SEC", 3600)
-
-MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 5000000.0)
-MIN_24H_CHANGE_PCT = getenv_float("MIN_24H_CHANGE_PCT", 3.0)
-MAX_24H_CHANGE_PCT = getenv_float("MAX_24H_CHANGE_PCT", 18.0)
-
-# لا نشتري عملات سعرها صغير جدًا جدًا أو فيها مخاطرة مبالغ
-MIN_LAST_PRICE = getenv_float("MIN_LAST_PRICE", 0.0001)
-
-# استبعاد عملات لا تريدها
-EXCLUDED_SYMBOLS = set(
-    s.strip().upper()
-    for s in getenv_str("EXCLUDED_SYMBOLS", "").split(",")
-    if s.strip()
-)
-
-# دمج الأساسي مع الديناميكي
-DYNAMIC_SYMBOLS = []
-LAST_GAINERS_REFRESH = 0
+# Early exit
+EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.25)
 
 
 # ================== Telegram ==================
@@ -160,6 +149,31 @@ def make_client():
 
 def get_price(client: Client, symbol: str) -> float:
     return float(client.get_symbol_ticker(symbol=symbol)["price"])
+
+
+def get_bid_ask(client: Client, symbol: str):
+    t = client.get_orderbook_ticker(symbol=symbol)
+    bid = float(t["bidPrice"])
+    ask = float(t["askPrice"])
+    return bid, ask
+
+
+def get_spread_pct(client: Client, symbol: str) -> float:
+    bid, ask = get_bid_ask(client, symbol)
+    if bid <= 0 or ask <= 0:
+        return 999.0
+    mid = (bid + ask) / 2.0
+    if mid <= 0:
+        return 999.0
+    return ((ask - bid) / mid) * 100.0
+
+
+def get_24h_quote_volume(client: Client, symbol: str) -> float:
+    try:
+        t = client.get_ticker(symbol=symbol)
+        return float(t.get("quoteVolume", 0) or 0)
+    except Exception:
+        return 0.0
 
 
 def base_asset(symbol: str) -> str:
@@ -249,83 +263,6 @@ def avg_fill_price_from_order(order) -> float:
         return 0.0
 
 
-def get_active_symbols():
-    merged = []
-    seen = set()
-
-    for sym in BASE_SYMBOLS + DYNAMIC_SYMBOLS:
-        if sym not in seen:
-            seen.add(sym)
-            merged.append(sym)
-
-    return merged
-
-
-def refresh_top_gainers(client: Client):
-    global DYNAMIC_SYMBOLS, LAST_GAINERS_REFRESH
-
-    if USE_TOP_GAINERS != "1":
-        return
-
-    now = int(time.time())
-    if (now - LAST_GAINERS_REFRESH) < TOP_GAINERS_REFRESH_SEC and DYNAMIC_SYMBOLS:
-        return
-
-    try:
-        tickers = client.get_ticker()
-        candidates = []
-
-        for t in tickers:
-            try:
-                sym = str(t.get("symbol", "")).upper()
-                if not sym.endswith("USDT"):
-                    continue
-                if sym in EXCLUDED_SYMBOLS:
-                    continue
-                if sym in BASE_SYMBOLS:
-                    continue
-
-                change_pct = float(t.get("priceChangePercent", 0) or 0)
-                quote_volume = float(t.get("quoteVolume", 0) or 0)
-                last_price = float(t.get("lastPrice", 0) or 0)
-            except Exception:
-                continue
-
-            if last_price < MIN_LAST_PRICE:
-                continue
-
-            if quote_volume < MIN_24H_QUOTE_VOLUME:
-                continue
-
-            if change_pct < MIN_24H_CHANGE_PCT:
-                continue
-
-            if change_pct > MAX_24H_CHANGE_PCT:
-                continue
-
-            try:
-                info = client.get_symbol_info(sym)
-                if not info or info.get("status") != "TRADING":
-                    continue
-            except Exception:
-                continue
-
-            candidates.append((sym, change_pct, quote_volume))
-
-        candidates.sort(key=lambda x: (x[1], x[2]), reverse=True)
-        selected = [x[0] for x in candidates[:TOP_GAINERS_LIMIT]]
-
-        DYNAMIC_SYMBOLS = selected
-        LAST_GAINERS_REFRESH = now
-
-        msg = f"🔥 Top Gainers refreshed: {', '.join(DYNAMIC_SYMBOLS) if DYNAMIC_SYMBOLS else 'none'}"
-        print(msg)
-        tg_send(msg)
-
-    except Exception as e:
-        print(f"⚠️ refresh_top_gainers failed: {e}")
-
-
 # ================== Indicators ==================
 def ema(prev_ema: float, price: float, period: int) -> float:
     k = 2 / (period + 1)
@@ -352,19 +289,21 @@ def calc_rsi(closes, period=14):
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def get_klines_interval():
+def get_klines_interval(val: str):
     m = {
         "1m": Client.KLINE_INTERVAL_1MINUTE,
         "3m": Client.KLINE_INTERVAL_3MINUTE,
         "5m": Client.KLINE_INTERVAL_5MINUTE,
+        "15m": Client.KLINE_INTERVAL_15MINUTE,
     }
-    return m.get(KLINES_INTERVAL, Client.KLINE_INTERVAL_1MINUTE)
+    return m.get(val, Client.KLINE_INTERVAL_1MINUTE)
 
 
 # ================== Risk / State ==================
 POSITIONS = {}      # sym -> {"entry": float, "peak_net": float, "highest_price": float, "entry_known": bool}
 LAST_TRADE_TS = {}  # sym -> ts
 STATE = {}          # sym -> indicator state
+TREND_STATE = {}    # sym -> trend state
 LAST_DEBUG_TS = {}  # sym -> ts
 
 
@@ -387,7 +326,7 @@ def is_dust(qty: float, price: float, min_notional: float) -> bool:
 
 def count_open_positions_wallet(client: Client) -> int:
     cnt = 0
-    for sym in get_active_symbols():
+    for sym in SYMBOLS:
         try:
             asset = base_asset(sym)
             qty = get_balance_free(client, asset)
@@ -407,7 +346,7 @@ def count_open_positions_wallet(client: Client) -> int:
 def refresh_indicators(client: Client, sym: str):
     now = int(time.time())
     st = STATE.setdefault(sym, {
-        "closes": deque(maxlen=300),
+        "closes": deque(maxlen=400),
         "last_klines_ts": 0,
         "ema_fast": 0.0,
         "ema_slow": 0.0,
@@ -421,7 +360,7 @@ def refresh_indicators(client: Client, sym: str):
     if (now - st["last_klines_ts"]) < KLINES_REFRESH_SEC and st["warm"]:
         return st
 
-    interval = get_klines_interval()
+    interval = get_klines_interval(KLINES_INTERVAL)
     kl = client.get_klines(symbol=sym, interval=interval, limit=KLINES_LIMIT)
     closes = [float(k[4]) for k in kl]
 
@@ -457,9 +396,52 @@ def refresh_indicators(client: Client, sym: str):
     return st
 
 
+def refresh_trend(client: Client, sym: str):
+    now = int(time.time())
+    st = TREND_STATE.setdefault(sym, {
+        "last_ts": 0,
+        "trend_ema": 0.0,
+        "last_close": 0.0,
+        "trend_ok": False,
+        "warm": False
+    })
+
+    if (now - st["last_ts"]) < TREND_REFRESH_SEC and st["warm"]:
+        return st
+
+    interval = get_klines_interval(TREND_INTERVAL)
+    kl = client.get_klines(symbol=sym, interval=interval, limit=TREND_LIMIT)
+    closes = [float(k[4]) for k in kl]
+
+    if len(closes) >= TREND_EMA:
+        ema_val = sum(closes[:TREND_EMA]) / TREND_EMA
+        for p in closes[TREND_EMA:]:
+            ema_val = ema(ema_val, p, TREND_EMA)
+
+        st["trend_ema"] = ema_val
+        st["last_close"] = closes[-1]
+        st["trend_ok"] = closes[-1] > ema_val
+        st["warm"] = True
+
+    st["last_ts"] = now
+    return st
+
+
 # ================== Strategy ==================
-def should_buy_scalp(st) -> bool:
+def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float) -> bool:
     if not st.get("warm"):
+        return False
+
+    if REQUIRE_TREND_FILTER == "1":
+        if not trend_st.get("warm"):
+            return False
+        if not trend_st.get("trend_ok"):
+            return False
+
+    if spread_pct > MAX_SPREAD_PCT:
+        return False
+
+    if quote_volume_24h < MIN_24H_QUOTE_VOLUME:
         return False
 
     ef = st["ema_fast"]
@@ -471,7 +453,7 @@ def should_buy_scalp(st) -> bool:
 
     cross_up = (pef <= pes) and (ef > es)
     rsi_ok = (RSI_BUY_MIN <= rsi <= RSI_BUY_MAX)
-    momentum_ok = close >= ef
+    momentum_ok = close >= ef and ef > es
 
     return cross_up and rsi_ok and momentum_ok
 
@@ -541,7 +523,7 @@ def sync_wallet_positions(client: Client):
 
     synced = []
 
-    for sym in get_active_symbols():
+    for sym in SYMBOLS:
         try:
             asset = base_asset(sym)
             qty = get_balance_free(client, asset)
@@ -684,7 +666,6 @@ def main():
     client = make_client()
     tg_send("✅ TEST: Worker is running now.")
 
-    refresh_top_gainers(client)
     sync_wallet_positions(client)
 
     last_hb = 0
@@ -693,21 +674,22 @@ def main():
         try:
             now = int(time.time())
 
-            refresh_top_gainers(client)
-            active_symbols = get_active_symbols()
-
             if now - last_hb >= HEARTBEAT_SEC:
                 last_hb = now
                 usdt_free_dbg = get_balance_free(client, "USDT")
-                print(f"💓 HEARTBEAT {now} | USDT_free={usdt_free_dbg:.2f} | symbols={','.join(active_symbols)}")
+                print(f"💓 HEARTBEAT {now} | USDT_free={usdt_free_dbg:.2f} | symbols={','.join(SYMBOLS)}")
 
             usdt_free = get_balance_free(client, "USDT")
             open_pos = count_open_positions_wallet(client)
 
-            for sym in active_symbols:
+            for sym in SYMBOLS:
                 st_ind = refresh_indicators(client, sym)
+                trend_st = refresh_trend(client, sym)
 
                 price = get_price(client, sym)
+                spread_pct = get_spread_pct(client, sym)
+                vol_24h = get_24h_quote_volume(client, sym)
+
                 asset = base_asset(sym)
                 qty_wallet = get_balance_free(client, asset)
                 step, min_qty, min_notional = get_lot_step(client, sym)
@@ -743,7 +725,8 @@ def main():
                     last_action=(
                         f"tick usdt_free={usdt_free:.2f} open_pos={open_pos} "
                         f"rsi={st_ind.get('rsi',0):.1f} gross={gross:.2f}% net={net:.2f}% "
-                        f"reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}% warm={st_ind.get('warm', False)}"
+                        f"trend_ok={trend_st.get('trend_ok', False)} spread={spread_pct:.3f}% "
+                        f"vol24h={vol_24h:.0f} reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
                     ),
                     last_error=""
                 )
@@ -789,13 +772,14 @@ def main():
                         f"price={price:.6f} qty={qty_effective:.8f} entry={entry:.6f} "
                         f"gross={gross:.2f}% net={net:.2f}% "
                         f"peak_net={POSITIONS.get(sym, {}).get('peak_net', 0.0):.2f}% "
-                        f"rsi={st_ind.get('rsi',0):.2f}"
+                        f"rsi={st_ind.get('rsi',0):.2f} trend_ok={trend_st.get('trend_ok', False)} "
+                        f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
                     )
                     continue
 
                 # ================== BUY ==================
                 open_pos = count_open_positions_wallet(client)
-                buy_signal = should_buy_scalp(st_ind)
+                buy_signal = should_buy_scalp(st_ind, trend_st, spread_pct, vol_24h)
 
                 if open_pos >= MAX_OPEN_POSITIONS:
                     maybe_debug_log(sym, f"[{sym}] BUY blocked: open_pos={open_pos} >= MAX_OPEN_POSITIONS={MAX_OPEN_POSITIONS}")
@@ -813,6 +797,10 @@ def main():
                     maybe_debug_log(sym, f"[{sym}] BUY blocked: indicators not warm yet")
                     continue
 
+                if REQUIRE_TREND_FILTER == "1" and not trend_st.get("warm", False):
+                    maybe_debug_log(sym, f"[{sym}] BUY blocked: trend not warm yet")
+                    continue
+
                 if not buy_signal:
                     maybe_debug_log(
                         sym,
@@ -820,15 +808,16 @@ def main():
                         f"price={price:.6f} rsi={st_ind.get('rsi',0):.2f} "
                         f"ema_fast={st_ind.get('ema_fast',0):.6f} "
                         f"ema_slow={st_ind.get('ema_slow',0):.6f} "
-                        f"prev_fast={st_ind.get('prev_ema_fast',0):.6f} "
-                        f"prev_slow={st_ind.get('prev_ema_slow',0):.6f}"
+                        f"trend_ok={trend_st.get('trend_ok', False)} "
+                        f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
                     )
                     continue
 
                 tg_send(
                     f"🟢 SCALP SIGNAL {sym} | rsi={st_ind['rsi']:.1f} "
                     f"ema{EMA_FAST}={st_ind['ema_fast']:.6f} ema{EMA_SLOW}={st_ind['ema_slow']:.6f} "
-                    f"reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}% (net target={MIN_NET_PROFIT_PCT:.2f}%)"
+                    f"trendEMA{TREND_EMA}={trend_st.get('trend_ema', 0):.6f} spread={spread_pct:.3f}% "
+                    f"reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
                 )
 
                 if safe_buy(client, sym, price):
