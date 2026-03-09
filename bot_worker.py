@@ -64,18 +64,19 @@ SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 # ================== Strategy Params ==================
 BUY_USDT = getenv_float("BUY_USDT", 12.0)
 
-TP_PCT = getenv_float("TP_PCT", 1.20)      # gross TP
-SL_PCT = getenv_float("SL_PCT", 0.90)      # gross SL
-CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 10.0)
+# defaults أقوى من النسخة السابقة
+TP_PCT = getenv_float("TP_PCT", 1.80)          # gross TP
+SL_PCT = getenv_float("SL_PCT", 0.90)          # gross SL
+CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 12.0)
 
 MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 15.0)
 MAX_OPEN_POSITIONS = getenv_int("MAX_OPEN_POSITIONS", 2)
-COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 60)
+COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 300)
 
 # Fees / slippage
 FEE_PCT = getenv_float("FEE_PCT", 0.10)
 SLIPPAGE_PCT = getenv_float("SLIPPAGE_PCT", 0.12)
-MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.40)
+MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.70)
 
 BREAKEVEN_PCT = (2.0 * FEE_PCT) + SLIPPAGE_PCT
 REQUIRED_GROSS_TP_PCT = max(TP_PCT, BREAKEVEN_PCT + MIN_NET_PROFIT_PCT)
@@ -89,42 +90,48 @@ HEARTBEAT_SEC = getenv_int("HEARTBEAT_SEC", 30)
 DEBUG_EVERY_SEC = getenv_int("DEBUG_EVERY_SEC", 180)
 
 # Indicators - Entry timeframe
-KLINES_INTERVAL = getenv_str("KLINES_INTERVAL", "1m")
-KLINES_LIMIT = getenv_int("KLINES_LIMIT", 120)
-KLINES_REFRESH_SEC = getenv_int("KLINES_REFRESH_SEC", 20)
+KLINES_INTERVAL = getenv_str("KLINES_INTERVAL", "3m")
+KLINES_LIMIT = getenv_int("KLINES_LIMIT", 180)
+KLINES_REFRESH_SEC = getenv_int("KLINES_REFRESH_SEC", 25)
 
 EMA_FAST = getenv_int("EMA_FAST", 9)
 EMA_SLOW = getenv_int("EMA_SLOW", 21)
 RSI_PERIOD = getenv_int("RSI_PERIOD", 14)
 
-RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 50.0)
-RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 65.0)
+RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 52.0)
+RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 60.0)
 
 EXIT_ON_EMA_CROSSDOWN = getenv_str("EXIT_ON_EMA_CROSSDOWN", "1")
 EXIT_RSI_OVERBOUGHT = getenv_float("EXIT_RSI_OVERBOUGHT", 74.0)
 
 # Trend filter - Higher timeframe
-TREND_INTERVAL = getenv_str("TREND_INTERVAL", "5m")
-TREND_LIMIT = getenv_int("TREND_LIMIT", 220)
+TREND_INTERVAL = getenv_str("TREND_INTERVAL", "15m")
+TREND_LIMIT = getenv_int("TREND_LIMIT", 260)
 TREND_EMA = getenv_int("TREND_EMA", 200)
-TREND_REFRESH_SEC = getenv_int("TREND_REFRESH_SEC", 60)
+TREND_REFRESH_SEC = getenv_int("TREND_REFRESH_SEC", 90)
 REQUIRE_TREND_FILTER = getenv_str("REQUIRE_TREND_FILTER", "1")
 
 # Market quality filters
-MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.18)
+MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.10)
 MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 50000000.0)
+
+# Volume / momentum filters
+VOLUME_LOOKBACK = getenv_int("VOLUME_LOOKBACK", 20)
+MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 1.15)   # آخر شمعة > متوسط الحجم
+REQUIRE_BULL_CANDLE = getenv_str("REQUIRE_BULL_CANDLE", "1")
 
 # Trailing
 ENABLE_TRAILING = getenv_str("ENABLE_TRAILING", "1")
-TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.35)
-TRAILING_GIVEBACK_PCT = getenv_float("TRAILING_GIVEBACK_PCT", 0.20)
+TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.80)
+TRAILING_GIVEBACK_PCT = getenv_float("TRAILING_GIVEBACK_PCT", 0.30)
 
-# Wallet sync
+# Wallet sync / manual positions
 SYNC_EXISTING_POSITIONS = getenv_str("SYNC_EXISTING_POSITIONS", "1")
 MANAGE_UNKNOWN_ENTRY = getenv_str("MANAGE_UNKNOWN_ENTRY", "1")
+TRADES_FETCH_LIMIT = getenv_int("TRADES_FETCH_LIMIT", 1000)
 
 # Early exit
-EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.25)
+EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.35)
 
 
 # ================== Telegram ==================
@@ -263,6 +270,21 @@ def avg_fill_price_from_order(order) -> float:
         return 0.0
 
 
+def executed_qty_from_order(order) -> float:
+    try:
+        qty = float(order.get("executedQty", 0) or 0)
+        if qty > 0:
+            return qty
+
+        fills = order.get("fills", [])
+        total = 0.0
+        for f in fills:
+            total += float(f.get("qty", 0) or 0)
+        return total
+    except Exception:
+        return 0.0
+
+
 # ================== Indicators ==================
 def ema(prev_ema: float, price: float, period: int) -> float:
     k = 2 / (period + 1)
@@ -296,15 +318,24 @@ def get_klines_interval(val: str):
         "5m": Client.KLINE_INTERVAL_5MINUTE,
         "15m": Client.KLINE_INTERVAL_15MINUTE,
     }
-    return m.get(val, Client.KLINE_INTERVAL_1MINUTE)
+    return m.get(val, Client.KLINE_INTERVAL_3MINUTE)
 
 
 # ================== Risk / State ==================
-POSITIONS = {}      # sym -> {"entry": float, "peak_net": float, "highest_price": float, "entry_known": bool}
-LAST_TRADE_TS = {}  # sym -> ts
-STATE = {}          # sym -> indicator state
-TREND_STATE = {}    # sym -> trend state
-LAST_DEBUG_TS = {}  # sym -> ts
+# position shape:
+# {
+#   "entry": float,
+#   "qty": float,
+#   "peak_net": float,
+#   "highest_price": float,
+#   "entry_known": bool,
+#   "source": "history" | "fallback" | "paper"
+# }
+POSITIONS = {}
+LAST_TRADE_TS = {}
+STATE = {}
+TREND_STATE = {}
+LAST_DEBUG_TS = {}
 
 
 def in_cooldown(sym: str) -> bool:
@@ -343,10 +374,157 @@ def count_open_positions_wallet(client: Client) -> int:
     return cnt
 
 
+# ================== Position From Trade History ==================
+def build_position_from_trades(client: Client, sym: str):
+    """
+    يحاول استخراج متوسط الدخول الفعلي من سجل التداول.
+    المنطق:
+    - buys تزيد الكمية والتكلفة
+    - sells تقلل الكمية وتخفض cost basis بنفس المتوسط الحالي
+    - في النهاية إذا بقيت كمية > 0 نحسب avg entry
+    """
+    asset = base_asset(sym)
+    wallet_qty = get_balance_free(client, asset)
+
+    if wallet_qty <= 0:
+        return None
+
+    try:
+        trades = client.get_my_trades(symbol=sym, limit=TRADES_FETCH_LIMIT)
+    except Exception:
+        trades = []
+
+    if not trades:
+        if MANAGE_UNKNOWN_ENTRY == "1":
+            price = get_price(client, sym)
+            return {
+                "entry": price,
+                "qty": wallet_qty,
+                "peak_net": 0.0,
+                "highest_price": price,
+                "entry_known": False,
+                "source": "fallback",
+            }
+        return None
+
+    qty = 0.0
+    cost = 0.0
+
+    # Binance يعيد غالبًا الأقدم -> الأحدث، ومع ذلك نرتب احتياطًا
+    trades = sorted(trades, key=lambda x: int(x.get("time", 0) or 0))
+
+    for tr in trades:
+        tr_qty = float(tr.get("qty", 0) or 0)
+        tr_price = float(tr.get("price", 0) or 0)
+        is_buyer = bool(tr.get("isBuyer", False))
+
+        if tr_qty <= 0 or tr_price <= 0:
+            continue
+
+        if is_buyer:
+            qty += tr_qty
+            cost += tr_qty * tr_price
+        else:
+            if qty <= 0:
+                qty = 0.0
+                cost = 0.0
+                continue
+
+            avg_entry = (cost / qty) if qty > 0 else 0.0
+            sell_qty = min(qty, tr_qty)
+            qty -= sell_qty
+            cost -= sell_qty * avg_entry
+
+            if qty <= 1e-12:
+                qty = 0.0
+                cost = 0.0
+
+    # نطابق الكمية النهائية مع المحفظة
+    if qty <= 0:
+        if MANAGE_UNKNOWN_ENTRY == "1":
+            price = get_price(client, sym)
+            return {
+                "entry": price,
+                "qty": wallet_qty,
+                "peak_net": 0.0,
+                "highest_price": price,
+                "entry_known": False,
+                "source": "fallback",
+            }
+        return None
+
+    avg_entry = cost / qty if qty > 0 else 0.0
+
+    # لو في اختلاف بسيط بين سجل Binance والرصيد الفعلي، نستخدم الرصيد الفعلي
+    if wallet_qty > 0 and avg_entry > 0:
+        price = get_price(client, sym)
+        return {
+            "entry": avg_entry,
+            "qty": wallet_qty,
+            "peak_net": 0.0,
+            "highest_price": price,
+            "entry_known": True,
+            "source": "history",
+        }
+
+    return None
+
+
+def sync_one_position(client: Client, sym: str):
+    asset = base_asset(sym)
+    qty = get_balance_free(client, asset)
+
+    if qty <= 0:
+        POSITIONS.pop(sym, None)
+        return None
+
+    price = get_price(client, sym)
+    _, _, min_notional = get_lot_step(client, sym)
+
+    if DUST_IGNORE == "1" and is_dust(qty, price, min_notional):
+        POSITIONS.pop(sym, None)
+        return None
+
+    old = POSITIONS.get(sym, {})
+    pos = build_position_from_trades(client, sym)
+    if not pos:
+        return None
+
+    pos["peak_net"] = float(old.get("peak_net", 0.0) or 0.0)
+    pos["highest_price"] = max(price, float(old.get("highest_price", 0.0) or 0.0), float(pos.get("highest_price", 0.0) or 0.0))
+    POSITIONS[sym] = pos
+    return pos
+
+
+def sync_wallet_positions(client: Client):
+    if SYNC_EXISTING_POSITIONS != "1":
+        return
+
+    synced = []
+
+    for sym in SYMBOLS:
+        try:
+            pos = sync_one_position(client, sym)
+            if pos:
+                synced.append(
+                    f"{sym} qty={pos['qty']:.6f} entry≈{pos['entry']:.6f} source={pos.get('source','?')}"
+                )
+        except Exception:
+            continue
+
+    if synced:
+        msg = "🔄 Synced wallet positions:\n" + "\n".join(synced)
+        print(msg)
+        tg_send(msg)
+
+
+# ================== Indicators Refresh ==================
 def refresh_indicators(client: Client, sym: str):
     now = int(time.time())
     st = STATE.setdefault(sym, {
-        "closes": deque(maxlen=400),
+        "closes": deque(maxlen=500),
+        "opens": deque(maxlen=500),
+        "volumes": deque(maxlen=500),
         "last_klines_ts": 0,
         "ema_fast": 0.0,
         "ema_slow": 0.0,
@@ -354,6 +532,10 @@ def refresh_indicators(client: Client, sym: str):
         "prev_ema_slow": 0.0,
         "rsi": 0.0,
         "last_close": 0.0,
+        "last_open": 0.0,
+        "last_volume": 0.0,
+        "avg_volume": 0.0,
+        "volume_ratio": 0.0,
         "warm": False
     })
 
@@ -362,32 +544,72 @@ def refresh_indicators(client: Client, sym: str):
 
     interval = get_klines_interval(KLINES_INTERVAL)
     kl = client.get_klines(symbol=sym, interval=interval, limit=KLINES_LIMIT)
+
+    # نستخدم الشموع المغلقة فقط
+    if len(kl) >= 2:
+        kl = kl[:-1]
+
+    opens = [float(k[1]) for k in kl]
     closes = [float(k[4]) for k in kl]
+    volumes = [float(k[5]) for k in kl]
 
     st["closes"].clear()
-    for c in closes:
-        st["closes"].append(c)
+    st["opens"].clear()
+    st["volumes"].clear()
+
+    for x in opens:
+        st["opens"].append(x)
+    for x in closes:
+        st["closes"].append(x)
+    for x in volumes:
+        st["volumes"].append(x)
 
     st["last_close"] = st["closes"][-1] if st["closes"] else 0.0
+    st["last_open"] = st["opens"][-1] if st["opens"] else 0.0
+    st["last_volume"] = st["volumes"][-1] if st["volumes"] else 0.0
     st["rsi"] = calc_rsi(list(st["closes"]), RSI_PERIOD)
 
+    vols = list(st["volumes"])
+    if len(vols) >= max(2, VOLUME_LOOKBACK):
+        base_vols = vols[-(VOLUME_LOOKBACK + 1):-1]
+        avg_vol = sum(base_vols) / len(base_vols) if base_vols else 0.0
+        st["avg_volume"] = avg_vol
+        st["volume_ratio"] = (st["last_volume"] / avg_vol) if avg_vol > 0 else 0.0
+
     if len(st["closes"]) >= EMA_SLOW:
-        fast_init = sum(list(st["closes"])[-EMA_FAST:]) / EMA_FAST
-        slow_init = sum(list(st["closes"])[-EMA_SLOW:]) / EMA_SLOW
+        close_list = list(st["closes"])
 
-        old_fast = st["ema_fast"] or fast_init
-        old_slow = st["ema_slow"] or slow_init
+        fast_init = sum(close_list[:EMA_FAST]) / EMA_FAST
+        slow_init = sum(close_list[:EMA_SLOW]) / EMA_SLOW
 
-        st["prev_ema_fast"] = old_fast
-        st["prev_ema_slow"] = old_slow
-
-        ef = old_fast
-        es = old_slow
-
-        for p in list(st["closes"])[-EMA_SLOW:]:
+        ef = fast_init
+        for p in close_list[EMA_FAST:]:
             ef = ema(ef, p, EMA_FAST)
+
+        es = slow_init
+        for p in close_list[EMA_SLOW:]:
             es = ema(es, p, EMA_SLOW)
 
+        # prev EMA من الشموع السابقة
+        if len(close_list) >= EMA_SLOW + 1:
+            prev_close_list = close_list[:-1]
+
+            pef_init = sum(prev_close_list[:EMA_FAST]) / EMA_FAST
+            pes_init = sum(prev_close_list[:EMA_SLOW]) / EMA_SLOW
+
+            pef = pef_init
+            for p in prev_close_list[EMA_FAST:]:
+                pef = ema(pef, p, EMA_FAST)
+
+            pes = pes_init
+            for p in prev_close_list[EMA_SLOW:]:
+                pes = ema(pes, p, EMA_SLOW)
+        else:
+            pef = ef
+            pes = es
+
+        st["prev_ema_fast"] = pef
+        st["prev_ema_slow"] = pes
         st["ema_fast"] = ef
         st["ema_slow"] = es
         st["warm"] = True
@@ -411,6 +633,10 @@ def refresh_trend(client: Client, sym: str):
 
     interval = get_klines_interval(TREND_INTERVAL)
     kl = client.get_klines(symbol=sym, interval=interval, limit=TREND_LIMIT)
+
+    if len(kl) >= 2:
+        kl = kl[:-1]
+
     closes = [float(k[4]) for k in kl]
 
     if len(closes) >= TREND_EMA:
@@ -450,12 +676,21 @@ def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float) -
     pes = st["prev_ema_slow"]
     rsi = st["rsi"]
     close = st["last_close"]
+    open_ = st.get("last_open", 0.0)
+    vol_ratio = st.get("volume_ratio", 0.0)
 
     cross_up = (pef <= pes) and (ef > es)
+    aligned_up = ef > es and close > ef
     rsi_ok = (RSI_BUY_MIN <= rsi <= RSI_BUY_MAX)
-    momentum_ok = close >= ef and ef > es
+    volume_ok = vol_ratio >= MIN_VOLUME_RATIO
+    bull_candle_ok = (close >= open_) if REQUIRE_BULL_CANDLE == "1" else True
 
-    return cross_up and rsi_ok and momentum_ok
+    # إما تقاطع جديد + زخم، أو اتجاه صاعد قوي + حجم قوي
+    strong_signal = (cross_up and rsi_ok and bull_candle_ok and volume_ok) or (
+        aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= (MIN_VOLUME_RATIO + 0.10)
+    )
+
+    return strong_signal
 
 
 def should_exit_early(st) -> bool:
@@ -517,53 +752,27 @@ def trailing_exit_triggered(sym: str, net: float) -> bool:
     return giveback >= TRAILING_GIVEBACK_PCT
 
 
-def sync_wallet_positions(client: Client):
-    if SYNC_EXISTING_POSITIONS != "1":
-        return
-
-    synced = []
-
-    for sym in SYMBOLS:
-        try:
-            asset = base_asset(sym)
-            qty = get_balance_free(client, asset)
-            if qty <= 0:
-                continue
-
-            price = get_price(client, sym)
-            _, _, min_notional = get_lot_step(client, sym)
-
-            if DUST_IGNORE == "1" and is_dust(qty, price, min_notional):
-                continue
-
-            if sym not in POSITIONS:
-                entry_price = price if MANAGE_UNKNOWN_ENTRY == "1" else 0.0
-                POSITIONS[sym] = {
-                    "entry": entry_price,
-                    "peak_net": 0.0,
-                    "highest_price": price,
-                    "entry_known": MANAGE_UNKNOWN_ENTRY == "1"
-                }
-                synced.append(f"{sym} qty={qty:.6f} entry≈{entry_price:.6f}")
-
-        except Exception:
-            continue
-
-    if synced:
-        msg = "🔄 Synced existing wallet positions:\n" + "\n".join(synced)
-        print(msg)
-        tg_send(msg)
-
-
 # ================== Trading Actions ==================
 def safe_buy(client: Client, sym: str, market_price_hint: float) -> bool:
     if MODE != "live":
         qty_paper = BUY_USDT / market_price_hint
+        old = POSITIONS.get(sym, {})
+        old_qty = float(old.get("qty", 0.0) or 0.0)
+        old_entry = float(old.get("entry", 0.0) or 0.0)
+
+        new_qty = old_qty + qty_paper
+        if new_qty > 0:
+            new_entry = ((old_qty * old_entry) + (qty_paper * market_price_hint)) / new_qty
+        else:
+            new_entry = market_price_hint
+
         POSITIONS[sym] = {
-            "entry": market_price_hint,
+            "entry": new_entry,
+            "qty": new_qty,
             "peak_net": 0.0,
             "highest_price": market_price_hint,
-            "entry_known": True
+            "entry_known": True,
+            "source": "paper",
         }
         add_trade(sym, "BUY", qty_paper, market_price_hint, "PAPER scalp buy")
         tg_send(f"🟢 PAPER BOUGHT {sym} qty={qty_paper:.6f} entry={market_price_hint:.6f}")
@@ -583,23 +792,26 @@ def safe_buy(client: Client, sym: str, market_price_hint: float) -> bool:
     order = market_buy(client, sym, BUY_USDT)
     time.sleep(1)
 
-    asset = base_asset(sym)
-    qty_new = get_balance_free(client, asset)
     exec_price = avg_fill_price_from_order(order) or market_price_hint
+    exec_qty = executed_qty_from_order(order)
 
-    if qty_new <= 0:
-        tg_send(f"⚠️ BUY sent but balance not updated yet for {sym}")
+    if exec_qty <= 0:
+        tg_send(f"⚠️ BUY sent but executedQty not found for {sym}")
+        sync_one_position(client, sym)
         return False
 
-    POSITIONS[sym] = {
-        "entry": exec_price,
-        "peak_net": 0.0,
-        "highest_price": exec_price,
-        "entry_known": True
-    }
+    add_trade(sym, "BUY", exec_qty, exec_price, "LIVE scalp buy")
 
-    add_trade(sym, "BUY", qty_new, exec_price, "LIVE scalp buy")
-    tg_send(f"✅ BOUGHT {sym} qty={qty_new:.6f} entry={exec_price:.6f}")
+    # نعيد مزامنة المركز من السجل حتى يشمل اليدوي + القديم + الشراء الجديد
+    pos = sync_one_position(client, sym)
+    if pos:
+        tg_send(
+            f"✅ BOUGHT {sym} new_qty={exec_qty:.6f} "
+            f"position_qty={pos['qty']:.6f} entry≈{pos['entry']:.6f}"
+        )
+    else:
+        tg_send(f"✅ BOUGHT {sym} qty={exec_qty:.6f} entry={exec_price:.6f}")
+
     return True
 
 
@@ -624,6 +836,7 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
         tg_send(f"⚠️ SELL blocked {sym}: dust notional={notional:.4f} < {min_notional}")
         return False
 
+    # بناءً على طلبك: يدير القديم واليدوي أيضًا، لذلك يبيع كامل الرصيد المتاح لهذا الزوج
     if MODE != "live":
         add_trade(sym, "SELL", sell_qty, price, f"PAPER {reason}")
         tg_send(f"✅ PAPER SOLD {sym} qty={sell_qty:.6f} ({reason})")
@@ -632,11 +845,16 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
 
     order = market_sell(client, sym, sell_qty)
     exec_price = avg_fill_price_from_order(order) or price
+    exec_qty = executed_qty_from_order(order) or sell_qty
 
-    add_trade(sym, "SELL", sell_qty, exec_price, reason)
-    tg_send(f"✅ SOLD {sym} qty={sell_qty:.6f} notional≈{sell_qty * exec_price:.2f} ({reason})")
+    add_trade(sym, "SELL", exec_qty, exec_price, reason)
+    tg_send(f"✅ SOLD {sym} qty={exec_qty:.6f} notional≈{exec_qty * exec_price:.2f} ({reason})")
 
-    POSITIONS.pop(sym, None)
+    time.sleep(1)
+    sync_one_position(client, sym)
+    if get_balance_free(client, asset) <= 0:
+        POSITIONS.pop(sym, None)
+
     return True
 
 
@@ -699,15 +917,14 @@ def main():
                 else:
                     qty_effective = qty_wallet
 
-                if qty_effective > 0 and sym not in POSITIONS and MANAGE_UNKNOWN_ENTRY == "1":
-                    POSITIONS[sym] = {
-                        "entry": price,
-                        "peak_net": 0.0,
-                        "highest_price": price,
-                        "entry_known": False
-                    }
+                # مزامنة أي مركز موجود بالمحفظة من سجل التداول
+                if qty_effective > 0:
+                    if sym not in POSITIONS:
+                        sync_one_position(client, sym)
+                    else:
+                        POSITIONS[sym]["qty"] = qty_effective
 
-                entry = float(POSITIONS.get(sym, {}).get("entry", 0.0))
+                entry = float(POSITIONS.get(sym, {}).get("entry", 0.0) or 0.0)
                 gross = gross_pnl_pct(entry, price) if qty_effective > 0 and entry > 0 else 0.0
                 net = net_pnl_pct(gross) if qty_effective > 0 and entry > 0 else 0.0
 
@@ -726,7 +943,8 @@ def main():
                         f"tick usdt_free={usdt_free:.2f} open_pos={open_pos} "
                         f"rsi={st_ind.get('rsi',0):.1f} gross={gross:.2f}% net={net:.2f}% "
                         f"trend_ok={trend_st.get('trend_ok', False)} spread={spread_pct:.3f}% "
-                        f"vol24h={vol_24h:.0f} reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
+                        f"vol24h={vol_24h:.0f} volRatio={st_ind.get('volume_ratio',0):.2f} "
+                        f"reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
                     ),
                     last_error=""
                 )
@@ -745,7 +963,7 @@ def main():
                             continue
 
                         if ENABLE_TRAILING == "1" and trailing_exit_triggered(sym, net):
-                            peak_net = float(POSITIONS.get(sym, {}).get("peak_net", 0.0))
+                            peak_net = float(POSITIONS.get(sym, {}).get("peak_net", 0.0) or 0.0)
                             tg_send(f"📉 Trailing exit {sym} peak_net={peak_net:.2f}% net={net:.2f}% -> SELL")
                             if safe_sell(client, sym, price, f"SCALP trailing peak_net={peak_net:.2f}% net={net:.2f}%"):
                                 mark_trade(sym)
@@ -772,7 +990,9 @@ def main():
                         f"price={price:.6f} qty={qty_effective:.8f} entry={entry:.6f} "
                         f"gross={gross:.2f}% net={net:.2f}% "
                         f"peak_net={POSITIONS.get(sym, {}).get('peak_net', 0.0):.2f}% "
-                        f"rsi={st_ind.get('rsi',0):.2f} trend_ok={trend_st.get('trend_ok', False)} "
+                        f"rsi={st_ind.get('rsi',0):.2f} "
+                        f"volRatio={st_ind.get('volume_ratio',0):.2f} "
+                        f"trend_ok={trend_st.get('trend_ok', False)} "
                         f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
                     )
                     continue
@@ -808,6 +1028,7 @@ def main():
                         f"price={price:.6f} rsi={st_ind.get('rsi',0):.2f} "
                         f"ema_fast={st_ind.get('ema_fast',0):.6f} "
                         f"ema_slow={st_ind.get('ema_slow',0):.6f} "
+                        f"volRatio={st_ind.get('volume_ratio',0):.2f} "
                         f"trend_ok={trend_st.get('trend_ok', False)} "
                         f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
                     )
@@ -816,8 +1037,9 @@ def main():
                 tg_send(
                     f"🟢 SCALP SIGNAL {sym} | rsi={st_ind['rsi']:.1f} "
                     f"ema{EMA_FAST}={st_ind['ema_fast']:.6f} ema{EMA_SLOW}={st_ind['ema_slow']:.6f} "
-                    f"trendEMA{TREND_EMA}={trend_st.get('trend_ema', 0):.6f} spread={spread_pct:.3f}% "
-                    f"reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
+                    f"trendEMA{TREND_EMA}={trend_st.get('trend_ema', 0):.6f} "
+                    f"volRatio={st_ind.get('volume_ratio',0):.2f} "
+                    f"spread={spread_pct:.3f}% reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
                 )
 
                 if safe_buy(client, sym, price):
