@@ -2,6 +2,7 @@ import os
 import time
 import math
 import traceback
+from datetime import datetime
 from collections import deque
 
 import requests
@@ -64,7 +65,6 @@ SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 # ================== Strategy Params ==================
 BUY_USDT = getenv_float("BUY_USDT", 12.0)
 
-# defaults أقوى من النسخة السابقة
 TP_PCT = getenv_float("TP_PCT", 1.80)          # gross TP
 SL_PCT = getenv_float("SL_PCT", 0.90)          # gross SL
 CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 12.0)
@@ -117,7 +117,7 @@ MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 50000000.0)
 
 # Volume / momentum filters
 VOLUME_LOOKBACK = getenv_int("VOLUME_LOOKBACK", 20)
-MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 1.15)   # آخر شمعة > متوسط الحجم
+MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 1.15)
 REQUIRE_BULL_CANDLE = getenv_str("REQUIRE_BULL_CANDLE", "1")
 
 # Trailing
@@ -133,6 +133,24 @@ TRADES_FETCH_LIMIT = getenv_int("TRADES_FETCH_LIMIT", 1000)
 # Early exit
 EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.35)
 
+# ================== Arabic Report Settings ==================
+REPORT_INTERVAL_SEC = getenv_int("REPORT_INTERVAL_SEC", 86400)   # 24 ساعة
+SEND_REPORT_ON_EACH_SELL = getenv_str("SEND_REPORT_ON_EACH_SELL", "1")
+SEND_DAILY_REPORT = getenv_str("SEND_DAILY_REPORT", "1")
+
+REPORT_STATE = {
+    "started_at": int(time.time()),
+    "last_report_ts": int(time.time()),
+    "buys": 0,
+    "sells": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_profit_usdt": 0.0,
+    "best_trade": None,
+    "worst_trade": None,
+    "symbols": {}
+}
+
 
 # ================== Telegram ==================
 def tg_send(msg: str):
@@ -140,9 +158,219 @@ def tg_send(msg: str):
         return
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, timeout=15, data={"chat_id": TG_ID, "text": msg})
+        requests.post(
+            url,
+            timeout=15,
+            data={
+                "chat_id": TG_ID,
+                "text": msg,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            }
+        )
     except Exception:
         pass
+
+
+# ================== Arabic Reporting Helpers ==================
+def fmt_usdt(x: float) -> str:
+    sign = "+" if x > 0 else ""
+    return f"{sign}{x:.2f} USDT"
+
+
+def fmt_pct(x: float) -> str:
+    sign = "+" if x > 0 else ""
+    return f"{sign}{x:.2f}%"
+
+
+def estimate_trade_pnl_usdt(entry: float, exit_price: float, qty: float) -> float:
+    """
+    ربح/خسارة تقريبي بعد خصم عمولتي شراء وبيع.
+    """
+    if entry <= 0 or exit_price <= 0 or qty <= 0:
+        return 0.0
+
+    buy_cost = entry * qty
+    sell_value = exit_price * qty
+
+    buy_fee = buy_cost * (FEE_PCT / 100.0)
+    sell_fee = sell_value * (FEE_PCT / 100.0)
+
+    pnl = sell_value - buy_cost - buy_fee - sell_fee
+    return pnl
+
+
+def update_report_stats_on_buy(sym: str):
+    REPORT_STATE["buys"] += 1
+    REPORT_STATE["symbols"].setdefault(sym, {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "profit": 0.0
+    })
+
+
+def update_report_stats_on_sell(sym: str, pnl_usdt: float):
+    REPORT_STATE["sells"] += 1
+    REPORT_STATE["total_profit_usdt"] += pnl_usdt
+
+    bucket = REPORT_STATE["symbols"].setdefault(sym, {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "profit": 0.0
+    })
+
+    bucket["trades"] += 1
+    bucket["profit"] += pnl_usdt
+
+    if pnl_usdt >= 0:
+        REPORT_STATE["wins"] += 1
+        bucket["wins"] += 1
+    else:
+        REPORT_STATE["losses"] += 1
+        bucket["losses"] += 1
+
+    best_trade = REPORT_STATE["best_trade"]
+    worst_trade = REPORT_STATE["worst_trade"]
+
+    if best_trade is None or pnl_usdt > best_trade["pnl"]:
+        REPORT_STATE["best_trade"] = {"symbol": sym, "pnl": pnl_usdt}
+
+    if worst_trade is None or pnl_usdt < worst_trade["pnl"]:
+        REPORT_STATE["worst_trade"] = {"symbol": sym, "pnl": pnl_usdt}
+
+
+def build_symbol_ranking_text():
+    rows = []
+    data = REPORT_STATE["symbols"]
+
+    ranked = sorted(
+        data.items(),
+        key=lambda kv: kv[1].get("profit", 0.0),
+        reverse=True
+    )
+
+    for sym, st in ranked[:5]:
+        rows.append(
+            f"• <b>{sym}</b>: {fmt_usdt(st['profit'])} | "
+            f"صفقات: {st['trades']} | ✅ {st['wins']} | ❌ {st['losses']}"
+        )
+
+    return "\n".join(rows) if rows else "• لا توجد صفقات مغلقة بعد"
+
+
+def build_arabic_analysis():
+    total = REPORT_STATE["sells"]
+    wins = REPORT_STATE["wins"]
+    losses = REPORT_STATE["losses"]
+    profit = REPORT_STATE["total_profit_usdt"]
+
+    if total == 0:
+        return "لا توجد صفقات بيع مغلقة بعد، لذلك ما زال الحكم على الأداء مبكرًا."
+
+    win_rate = (wins / total) * 100 if total > 0 else 0.0
+
+    notes = []
+
+    if profit > 0:
+        notes.append("الأداء العام إيجابي وصافي النتيجة حتى الآن رابح.")
+    elif profit < 0:
+        notes.append("الأداء العام سلبي حاليًا ويحتاج إلى مراجعة إعدادات الدخول والخروج.")
+    else:
+        notes.append("الأداء متعادل تقريبًا حتى الآن.")
+
+    if win_rate >= 65:
+        notes.append("نسبة النجاح جيدة وتدل على أن شروط الدخول منضبطة نسبيًا.")
+    elif win_rate >= 50:
+        notes.append("نسبة النجاح مقبولة، لكن يمكن تحسين التصفية قبل الدخول.")
+    else:
+        notes.append("نسبة النجاح منخفضة، والأفضل تشديد شروط الإشارة وتقليل الدخولات الضعيفة.")
+
+    if profit > 5:
+        notes.append("الربح اليومي جيد، ويمكن التفكير بزيادة مدروسة لحجم الصفقة فقط إذا بقيت المخاطرة منضبطة.")
+    elif profit < -3:
+        notes.append("يفضل تخفيف المخاطرة أو تقليل عدد الأزواج مؤقتًا حتى يعود الأداء للاستقرار.")
+
+    return "\n- " + "\n- ".join(notes)
+
+
+def build_daily_report_message():
+    elapsed_sec = max(1, int(time.time()) - REPORT_STATE["started_at"])
+    hours = elapsed_sec / 3600.0
+    total_closed = REPORT_STATE["sells"]
+    wins = REPORT_STATE["wins"]
+    losses = REPORT_STATE["losses"]
+    total_profit = REPORT_STATE["total_profit_usdt"]
+    win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
+
+    best_trade = REPORT_STATE["best_trade"]
+    worst_trade = REPORT_STATE["worst_trade"]
+
+    best_text = (
+        f"{best_trade['symbol']} {fmt_usdt(best_trade['pnl'])}"
+        if best_trade else "لا يوجد"
+    )
+    worst_text = (
+        f"{worst_trade['symbol']} {fmt_usdt(worst_trade['pnl'])}"
+        if worst_trade else "لا يوجد"
+    )
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    msg = (
+        "📊 <b>تقرير التداول الآلي</b>\n\n"
+        f"📅 <b>وقت التقرير:</b> {now_str}\n"
+        f"🕒 <b>الفترة:</b> آخر {hours:.1f} ساعة\n"
+        f"🟢 <b>عمليات الشراء:</b> {REPORT_STATE['buys']}\n"
+        f"🔴 <b>الصفقات المغلقة:</b> {total_closed}\n"
+        f"✅ <b>الصفقات الرابحة:</b> {wins}\n"
+        f"❌ <b>الصفقات الخاسرة:</b> {losses}\n"
+        f"🎯 <b>نسبة النجاح:</b> {win_rate:.1f}%\n"
+        f"💰 <b>صافي الربح:</b> {fmt_usdt(total_profit)}\n"
+        f"🏆 <b>أفضل صفقة:</b> {best_text}\n"
+        f"⚠️ <b>أسوأ صفقة:</b> {worst_text}\n\n"
+        f"📌 <b>أفضل الأزواج:</b>\n{build_symbol_ranking_text()}\n\n"
+        f"🧠 <b>التحليل:</b>{build_arabic_analysis()}"
+    )
+    return msg
+
+
+def send_periodic_report_if_due():
+    if SEND_DAILY_REPORT != "1":
+        return
+
+    now = int(time.time())
+    last_ts = int(REPORT_STATE.get("last_report_ts", now))
+
+    if (now - last_ts) >= REPORT_INTERVAL_SEC:
+        tg_send(build_daily_report_message())
+        REPORT_STATE["last_report_ts"] = now
+
+
+def send_sell_analysis_message(sym: str, qty: float, entry: float, exit_price: float, reason: str):
+    pnl_usdt = estimate_trade_pnl_usdt(entry, exit_price, qty)
+    gross_pct = gross_pnl_pct(entry, exit_price) if entry > 0 else 0.0
+    net_pct_est = gross_pct - (2.0 * FEE_PCT)
+
+    direction = "ربح" if pnl_usdt >= 0 else "خسارة"
+
+    msg = (
+        f"📉 <b>إغلاق صفقة {sym}</b>\n\n"
+        f"📦 <b>الكمية:</b> {qty:.6f}\n"
+        f"📥 <b>سعر الدخول:</b> {entry:.6f}\n"
+        f"📤 <b>سعر الخروج:</b> {exit_price:.6f}\n"
+        f"📊 <b>النتيجة:</b> {direction}\n"
+        f"💵 <b>الربح/الخسارة التقريبي:</b> {fmt_usdt(pnl_usdt)}\n"
+        f"📈 <b>التغير الإجمالي:</b> {fmt_pct(gross_pct)}\n"
+        f"🧾 <b>التغير الصافي التقريبي بعد الرسوم:</b> {fmt_pct(net_pct_est)}\n"
+        f"📝 <b>سبب الخروج:</b> {reason}\n\n"
+        f"🧠 <b>تحليل سريع:</b>\n"
+        f"- تم إغلاق الصفقة بناءً على شرط النظام الحالي.\n"
+        f"- هذه النتيجة {'إيجابية' if pnl_usdt >= 0 else 'سلبية'} بالنسبة لهذه العملية.\n"
+        f"- يفضّل متابعة التقرير الدوري لمعرفة أداء جميع الأزواج بشكل مجمّع."
+    )
+    tg_send(msg)
 
 
 # ================== Binance Helpers ==================
@@ -322,15 +550,6 @@ def get_klines_interval(val: str):
 
 
 # ================== Risk / State ==================
-# position shape:
-# {
-#   "entry": float,
-#   "qty": float,
-#   "peak_net": float,
-#   "highest_price": float,
-#   "entry_known": bool,
-#   "source": "history" | "fallback" | "paper"
-# }
 POSITIONS = {}
 LAST_TRADE_TS = {}
 STATE = {}
@@ -378,10 +597,6 @@ def count_open_positions_wallet(client: Client) -> int:
 def build_position_from_trades(client: Client, sym: str):
     """
     يحاول استخراج متوسط الدخول الفعلي من سجل التداول.
-    المنطق:
-    - buys تزيد الكمية والتكلفة
-    - sells تقلل الكمية وتخفض cost basis بنفس المتوسط الحالي
-    - في النهاية إذا بقيت كمية > 0 نحسب avg entry
     """
     asset = base_asset(sym)
     wallet_qty = get_balance_free(client, asset)
@@ -410,7 +625,6 @@ def build_position_from_trades(client: Client, sym: str):
     qty = 0.0
     cost = 0.0
 
-    # Binance يعيد غالبًا الأقدم -> الأحدث، ومع ذلك نرتب احتياطًا
     trades = sorted(trades, key=lambda x: int(x.get("time", 0) or 0))
 
     for tr in trades:
@@ -439,7 +653,6 @@ def build_position_from_trades(client: Client, sym: str):
                 qty = 0.0
                 cost = 0.0
 
-    # نطابق الكمية النهائية مع المحفظة
     if qty <= 0:
         if MANAGE_UNKNOWN_ENTRY == "1":
             price = get_price(client, sym)
@@ -455,7 +668,6 @@ def build_position_from_trades(client: Client, sym: str):
 
     avg_entry = cost / qty if qty > 0 else 0.0
 
-    # لو في اختلاف بسيط بين سجل Binance والرصيد الفعلي، نستخدم الرصيد الفعلي
     if wallet_qty > 0 and avg_entry > 0:
         price = get_price(client, sym)
         return {
@@ -491,7 +703,11 @@ def sync_one_position(client: Client, sym: str):
         return None
 
     pos["peak_net"] = float(old.get("peak_net", 0.0) or 0.0)
-    pos["highest_price"] = max(price, float(old.get("highest_price", 0.0) or 0.0), float(pos.get("highest_price", 0.0) or 0.0))
+    pos["highest_price"] = max(
+        price,
+        float(old.get("highest_price", 0.0) or 0.0),
+        float(pos.get("highest_price", 0.0) or 0.0)
+    )
     POSITIONS[sym] = pos
     return pos
 
@@ -507,13 +723,13 @@ def sync_wallet_positions(client: Client):
             pos = sync_one_position(client, sym)
             if pos:
                 synced.append(
-                    f"{sym} qty={pos['qty']:.6f} entry≈{pos['entry']:.6f} source={pos.get('source','?')}"
+                    f"{sym} qty={pos['qty']:.6f} entry≈{pos['entry']:.6f} source={pos.get('source', '?')}"
                 )
         except Exception:
             continue
 
     if synced:
-        msg = "🔄 Synced wallet positions:\n" + "\n".join(synced)
+        msg = "🔄 <b>تمت مزامنة المراكز الموجودة بالمحفظة:</b>\n" + "\n".join(synced)
         print(msg)
         tg_send(msg)
 
@@ -545,7 +761,6 @@ def refresh_indicators(client: Client, sym: str):
     interval = get_klines_interval(KLINES_INTERVAL)
     kl = client.get_klines(symbol=sym, interval=interval, limit=KLINES_LIMIT)
 
-    # نستخدم الشموع المغلقة فقط
     if len(kl) >= 2:
         kl = kl[:-1]
 
@@ -590,7 +805,6 @@ def refresh_indicators(client: Client, sym: str):
         for p in close_list[EMA_SLOW:]:
             es = ema(es, p, EMA_SLOW)
 
-        # prev EMA من الشموع السابقة
         if len(close_list) >= EMA_SLOW + 1:
             prev_close_list = close_list[:-1]
 
@@ -685,7 +899,6 @@ def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float) -
     volume_ok = vol_ratio >= MIN_VOLUME_RATIO
     bull_candle_ok = (close >= open_) if REQUIRE_BULL_CANDLE == "1" else True
 
-    # إما تقاطع جديد + زخم، أو اتجاه صاعد قوي + حجم قوي
     strong_signal = (cross_up and rsi_ok and bull_candle_ok and volume_ok) or (
         aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= (MIN_VOLUME_RATIO + 0.10)
     )
@@ -775,6 +988,7 @@ def safe_buy(client: Client, sym: str, market_price_hint: float) -> bool:
             "source": "paper",
         }
         add_trade(sym, "BUY", qty_paper, market_price_hint, "PAPER scalp buy")
+        update_report_stats_on_buy(sym)
         tg_send(f"🟢 PAPER BOUGHT {sym} qty={qty_paper:.6f} entry={market_price_hint:.6f}")
         return True
 
@@ -801,8 +1015,8 @@ def safe_buy(client: Client, sym: str, market_price_hint: float) -> bool:
         return False
 
     add_trade(sym, "BUY", exec_qty, exec_price, "LIVE scalp buy")
+    update_report_stats_on_buy(sym)
 
-    # نعيد مزامنة المركز من السجل حتى يشمل اليدوي + القديم + الشراء الجديد
     pos = sync_one_position(client, sym)
     if pos:
         tg_send(
@@ -821,6 +1035,9 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
     if qty_wallet <= 0:
         return False
 
+    pos_before = dict(POSITIONS.get(sym, {}) or {})
+    entry_before = float(pos_before.get("entry", 0.0) or 0.0)
+
     step, min_qty, min_notional = get_lot_step(client, sym)
     sell_qty = round_step(qty_wallet, step)
     notional = sell_qty * price
@@ -836,9 +1053,15 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
         tg_send(f"⚠️ SELL blocked {sym}: dust notional={notional:.4f} < {min_notional}")
         return False
 
-    # بناءً على طلبك: يدير القديم واليدوي أيضًا، لذلك يبيع كامل الرصيد المتاح لهذا الزوج
     if MODE != "live":
         add_trade(sym, "SELL", sell_qty, price, f"PAPER {reason}")
+
+        pnl_usdt = estimate_trade_pnl_usdt(entry_before, price, sell_qty) if entry_before > 0 else 0.0
+        update_report_stats_on_sell(sym, pnl_usdt)
+
+        if SEND_REPORT_ON_EACH_SELL == "1" and entry_before > 0:
+            send_sell_analysis_message(sym, sell_qty, entry_before, price, f"PAPER {reason}")
+
         tg_send(f"✅ PAPER SOLD {sym} qty={sell_qty:.6f} ({reason})")
         POSITIONS.pop(sym, None)
         return True
@@ -848,7 +1071,14 @@ def safe_sell(client: Client, sym: str, price: float, reason: str) -> bool:
     exec_qty = executed_qty_from_order(order) or sell_qty
 
     add_trade(sym, "SELL", exec_qty, exec_price, reason)
+
+    pnl_usdt = estimate_trade_pnl_usdt(entry_before, exec_price, exec_qty) if entry_before > 0 else 0.0
+    update_report_stats_on_sell(sym, pnl_usdt)
+
     tg_send(f"✅ SOLD {sym} qty={exec_qty:.6f} notional≈{exec_qty * exec_price:.2f} ({reason})")
+
+    if SEND_REPORT_ON_EACH_SELL == "1" and entry_before > 0:
+        send_sell_analysis_message(sym, exec_qty, entry_before, exec_price, reason)
 
     time.sleep(1)
     sync_one_position(client, sym)
@@ -872,12 +1102,13 @@ def main():
     init_db()
 
     print(f"🤖 BOT WORKER STARTED MODE={MODE}")
-    tg_send(f"🤖 Bot worker started. MODE={MODE}")
+    tg_send(f"🤖 <b>تم تشغيل البوت</b>\nالوضع الحالي: <b>{MODE}</b>")
 
     if TP_PCT < (BREAKEVEN_PCT + MIN_NET_PROFIT_PCT):
         tg_send(
-            f"⚠️ TP_PCT={TP_PCT:.2f}% is small. "
-            f"Breakeven≈{BREAKEVEN_PCT:.2f}%, MinNet={MIN_NET_PROFIT_PCT:.2f}%. "
+            f"⚠️ TP_PCT={TP_PCT:.2f}% صغير نسبيًا.\n"
+            f"Breakeven≈{BREAKEVEN_PCT:.2f}%\n"
+            f"MinNet={MIN_NET_PROFIT_PCT:.2f}%\n"
             f"RequiredGrossTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
         )
 
@@ -896,6 +1127,8 @@ def main():
                 last_hb = now
                 usdt_free_dbg = get_balance_free(client, "USDT")
                 print(f"💓 HEARTBEAT {now} | USDT_free={usdt_free_dbg:.2f} | symbols={','.join(SYMBOLS)}")
+
+            send_periodic_report_if_due()
 
             usdt_free = get_balance_free(client, "USDT")
             open_pos = count_open_positions_wallet(client)
@@ -917,7 +1150,6 @@ def main():
                 else:
                     qty_effective = qty_wallet
 
-                # مزامنة أي مركز موجود بالمحفظة من سجل التداول
                 if qty_effective > 0:
                     if sym not in POSITIONS:
                         sync_one_position(client, sym)
@@ -941,9 +1173,9 @@ def main():
                     position_entry=entry,
                     last_action=(
                         f"tick usdt_free={usdt_free:.2f} open_pos={open_pos} "
-                        f"rsi={st_ind.get('rsi',0):.1f} gross={gross:.2f}% net={net:.2f}% "
+                        f"rsi={st_ind.get('rsi', 0):.1f} gross={gross:.2f}% net={net:.2f}% "
                         f"trend_ok={trend_st.get('trend_ok', False)} spread={spread_pct:.3f}% "
-                        f"vol24h={vol_24h:.0f} volRatio={st_ind.get('volume_ratio',0):.2f} "
+                        f"vol24h={vol_24h:.0f} volRatio={st_ind.get('volume_ratio', 0):.2f} "
                         f"reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
                     ),
                     last_error=""
@@ -990,8 +1222,8 @@ def main():
                         f"price={price:.6f} qty={qty_effective:.8f} entry={entry:.6f} "
                         f"gross={gross:.2f}% net={net:.2f}% "
                         f"peak_net={POSITIONS.get(sym, {}).get('peak_net', 0.0):.2f}% "
-                        f"rsi={st_ind.get('rsi',0):.2f} "
-                        f"volRatio={st_ind.get('volume_ratio',0):.2f} "
+                        f"rsi={st_ind.get('rsi', 0):.2f} "
+                        f"volRatio={st_ind.get('volume_ratio', 0):.2f} "
                         f"trend_ok={trend_st.get('trend_ok', False)} "
                         f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
                     )
@@ -1025,10 +1257,10 @@ def main():
                     maybe_debug_log(
                         sym,
                         f"[{sym}] NO BUY SIGNAL | "
-                        f"price={price:.6f} rsi={st_ind.get('rsi',0):.2f} "
-                        f"ema_fast={st_ind.get('ema_fast',0):.6f} "
-                        f"ema_slow={st_ind.get('ema_slow',0):.6f} "
-                        f"volRatio={st_ind.get('volume_ratio',0):.2f} "
+                        f"price={price:.6f} rsi={st_ind.get('rsi', 0):.2f} "
+                        f"ema_fast={st_ind.get('ema_fast', 0):.6f} "
+                        f"ema_slow={st_ind.get('ema_slow', 0):.6f} "
+                        f"volRatio={st_ind.get('volume_ratio', 0):.2f} "
                         f"trend_ok={trend_st.get('trend_ok', False)} "
                         f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
                     )
@@ -1038,7 +1270,7 @@ def main():
                     f"🟢 SCALP SIGNAL {sym} | rsi={st_ind['rsi']:.1f} "
                     f"ema{EMA_FAST}={st_ind['ema_fast']:.6f} ema{EMA_SLOW}={st_ind['ema_slow']:.6f} "
                     f"trendEMA{TREND_EMA}={trend_st.get('trend_ema', 0):.6f} "
-                    f"volRatio={st_ind.get('volume_ratio',0):.2f} "
+                    f"volRatio={st_ind.get('volume_ratio', 0):.2f} "
                     f"spread={spread_pct:.3f}% reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
                 )
 
