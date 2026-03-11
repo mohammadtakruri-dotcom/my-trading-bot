@@ -54,23 +54,25 @@ ENABLE_TRADING = getenv_str("ENABLE_TRADING", "0")
 LIVE_TRADING = getenv_str("LIVE_TRADING", "0")
 MODE = "live" if (ENABLE_TRADING == "1" or LIVE_TRADING == "1") else "paper"
 
-# المنصات النشطة
 ACTIVE_EXCHANGES = getenv_str("ACTIVE_EXCHANGES", "binance,bybit")
 ACTIVE_EXCHANGES = [x.strip().lower() for x in ACTIVE_EXCHANGES.split(",") if x.strip()]
 
-# رموز التداول - يقبل BTCUSDT أو BTC/USDT
-DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,XRPUSDT"
+DEFAULT_SYMBOLS = (
+    "BTCUSDT,ETHUSDT,XRPUSDT,BNBUSDT,SOLUSDT,ADAUSDT,DOGEUSDT,"
+    "LINKUSDT,AVAXUSDT,DOTUSDT,LTCUSDT,BCHUSDT,ATOMUSDT,UNIUSDT,"
+    "APTUSDT,NEARUSDT,ARBUSDT,OPUSDT,FILUSDT,ETCUSDT"
+)
 SYMBOLS = getenv_str("SYMBOLS", DEFAULT_SYMBOLS)
 SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 
 # ================== Strategy Params ==================
-BUY_USDT = getenv_float("BUY_USDT", 12.0)
+BUY_USDT = getenv_float("BUY_USDT", 8.0)
 
 TP_PCT = getenv_float("TP_PCT", 1.25)
 SL_PCT = getenv_float("SL_PCT", 0.55)
 CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 8.0)
 
-MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 15.0)
+MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 8.0)
 MAX_OPEN_POSITIONS = getenv_int("MAX_OPEN_POSITIONS", 1)
 COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 180)
 
@@ -128,17 +130,24 @@ REPORT_INTERVAL_SEC = getenv_int("REPORT_INTERVAL_SEC", 86400)
 SEND_REPORT_ON_EACH_SELL = getenv_str("SEND_REPORT_ON_EACH_SELL", "1")
 SEND_DAILY_REPORT = getenv_str("SEND_DAILY_REPORT", "1")
 
+SEND_HOURLY_MARKET_REPORT = getenv_str("SEND_HOURLY_MARKET_REPORT", "1")
+HOURLY_MARKET_REPORT_SEC = getenv_int("HOURLY_MARKET_REPORT_SEC", 3600)
+
+BUY_SCORE_MIN = getenv_float("BUY_SCORE_MIN", 55.0)
+MAX_CANDIDATES_PER_EXCHANGE = getenv_int("MAX_CANDIDATES_PER_EXCHANGE", 5)
+
 
 # ================== Global State ==================
-POSITIONS = {}       # key = exch:symbol
-LAST_TRADE_TS = {}   # key = exch:symbol
-STATE = {}           # key = exch:symbol
-TREND_STATE = {}     # key = exch:symbol
-LAST_DEBUG_TS = {}   # key = exch:symbol
+POSITIONS = {}
+LAST_TRADE_TS = {}
+STATE = {}
+TREND_STATE = {}
+LAST_DEBUG_TS = {}
 
 REPORT_STATE = {
     "started_at": int(time.time()),
     "last_report_ts": int(time.time()),
+    "last_market_report_ts": int(time.time()),
     "buys": 0,
     "sells": 0,
     "wins": 0,
@@ -153,10 +162,12 @@ REPORT_STATE = {
 # ================== Telegram ==================
 def tg_send(msg: str):
     if not TG_TOKEN or not TG_ID:
-        return
+        print("Telegram disabled: missing TG_TOKEN or TG_ID")
+        return False
+
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(
+        r = requests.post(
             url,
             timeout=15,
             data={
@@ -166,8 +177,13 @@ def tg_send(msg: str):
                 "disable_web_page_preview": True
             }
         )
-    except Exception:
-        pass
+        if r.status_code != 200:
+            print("TG SEND FAILED:", r.status_code, r.text[:500])
+            return False
+        return True
+    except Exception as e:
+        print("TG ERROR:", e)
+        return False
 
 
 # ================== Formatting ==================
@@ -392,6 +408,45 @@ def send_sell_analysis_message(lbl: str, qty: float, entry: float, exit_price: f
     tg_send(msg)
 
 
+def build_hourly_market_report(candidates):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if not candidates:
+        return (
+            "🕐 <b>ملخص السوق الساعي</b>\n\n"
+            f"📅 <b>الوقت:</b> {now_str}\n"
+            "لا توجد فرص شراء قوية حاليًا حسب الشروط الحالية."
+        )
+
+    lines = []
+    ranked = sorted(candidates, key=lambda x: x["score"], reverse=True)[:10]
+
+    for c in ranked:
+        lines.append(
+            f"• <b>{c['exchange']} {c['symbol']}</b> | "
+            f"Score={c['score']:.1f} | RSI={c['rsi']:.1f} | "
+            f"Vol={c['vol_ratio']:.2f} | Spread={c['spread']:.3f}%"
+        )
+
+    return (
+        "🕐 <b>ملخص السوق الساعي</b>\n\n"
+        f"📅 <b>الوقت:</b> {now_str}\n"
+        f"📈 <b>أفضل الفرص الحالية:</b>\n" + "\n".join(lines)
+    )
+
+
+def send_hourly_market_report_if_due(candidates):
+    if SEND_HOURLY_MARKET_REPORT != "1":
+        return
+
+    now = int(time.time())
+    last_ts = int(REPORT_STATE.get("last_market_report_ts", now))
+
+    if (now - last_ts) >= HOURLY_MARKET_REPORT_SEC:
+        tg_send(build_hourly_market_report(candidates))
+        REPORT_STATE["last_market_report_ts"] = now
+
+
 # ================== Exchange Setup ==================
 def make_exchange(exchange_id: str):
     exchange_id = exchange_id.lower()
@@ -513,11 +568,6 @@ def get_lot_step(exchange, symbol: str):
     step = 0.0
     min_qty = 0.0
     min_notional = 0.0
-
-    precision_amt = market.get("precision", {}).get("amount")
-    if precision_amt is not None:
-        # لا نحول precision إلى step مباشرة إذا كانت كسور عشرية كبيرة
-        pass
 
     limits = market.get("limits", {}) or {}
     amt_limits = limits.get("amount", {}) or {}
@@ -1031,6 +1081,67 @@ def trailing_exit_triggered(key: str, net: float) -> bool:
     return giveback >= TRAILING_GIVEBACK_PCT
 
 
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def calc_buy_score(st, trend_st, spread_pct: float, quote_volume_24h: float) -> float:
+    if not st.get("warm"):
+        return 0.0
+
+    if REQUIRE_TREND_FILTER == "1":
+        if not trend_st.get("warm") or not trend_st.get("trend_ok"):
+            return 0.0
+
+    if spread_pct > MAX_SPREAD_PCT:
+        return 0.0
+
+    if quote_volume_24h < MIN_24H_QUOTE_VOLUME:
+        return 0.0
+
+    score = 0.0
+
+    rsi = float(st.get("rsi", 0.0))
+    vol_ratio = float(st.get("volume_ratio", 0.0))
+    ef = float(st.get("ema_fast", 0.0))
+    es = float(st.get("ema_slow", 0.0))
+    pef = float(st.get("prev_ema_fast", 0.0))
+    pes = float(st.get("prev_ema_slow", 0.0))
+    close = float(st.get("last_close", 0.0))
+    open_ = float(st.get("last_open", 0.0))
+
+    cross_up = (pef <= pes) and (ef > es)
+    aligned_up = ef > es and close > ef
+    bull_candle = close >= open_
+
+    if cross_up:
+        score += 25
+    elif aligned_up:
+        score += 15
+
+    if RSI_BUY_MIN <= rsi <= RSI_BUY_MAX:
+        score += 20
+    elif 48 <= rsi <= 65:
+        score += 10
+
+    score += clamp((vol_ratio - 0.8) * 25, 0, 20)
+
+    if bull_candle or REQUIRE_BULL_CANDLE != "1":
+        score += 10
+
+    score += clamp((MAX_SPREAD_PCT - spread_pct) * 150, 0, 15)
+
+    vol_bonus = 0.0
+    if quote_volume_24h >= MIN_24H_QUOTE_VOLUME:
+        vol_bonus = min(10.0, math.log10(max(quote_volume_24h, 1)) - 6.5)
+    score += max(0.0, vol_bonus)
+
+    if trend_st.get("trend_ok"):
+        score += 10
+
+    return clamp(score, 0.0, 100.0)
+
+
 # ================== Trading Actions ==================
 def safe_buy(exchange, exchange_id: str, sym: str, market_price_hint: float) -> bool:
     key = pair_key(exchange_id, sym)
@@ -1071,7 +1182,7 @@ def safe_buy(exchange, exchange_id: str, sym: str, market_price_hint: float) -> 
         tg_send(f"⚠️ Not enough USDT to buy {lbl}: free={usdt_free:.2f}")
         return False
 
-    tg_send(f"🟢 SCALP BUY {lbl} amount={BUY_USDT:.2f} USDT (MODE=live)")
+    tg_send(f"🟢 SCALP BUY {lbl} amount={BUY_USDT:.2f} USDT (MODE={MODE})")
     order = market_buy(exchange, sym, BUY_USDT, market_price_hint)
     time.sleep(1)
 
@@ -1169,6 +1280,63 @@ def maybe_debug_log(key: str, text: str):
         print(text)
 
 
+# ================== Candidates ==================
+def collect_exchange_candidates(exchange, exchange_id: str, symbols):
+    candidates = []
+
+    usdt_free = get_balance_free(exchange, "USDT")
+    open_pos = count_open_positions_wallet(exchange, exchange_id, symbols)
+
+    if open_pos >= MAX_OPEN_POSITIONS:
+        return candidates
+
+    if usdt_free < MIN_USDT_FREE_TO_BUY:
+        return candidates
+
+    for sym in symbols:
+        key = pair_key(exchange_id, sym)
+
+        if in_cooldown(key):
+            continue
+
+        base, _ = split_symbol(sym)
+        qty_wallet = get_balance_free(exchange, base)
+        if qty_wallet > 0:
+            continue
+
+        try:
+            st_ind = refresh_indicators(exchange, exchange_id, sym)
+            trend_st = refresh_trend(exchange, exchange_id, sym)
+
+            price = get_price(exchange, sym)
+            spread_pct = get_spread_pct(exchange, sym)
+            vol_24h = get_24h_quote_volume(exchange, sym)
+
+            score = calc_buy_score(st_ind, trend_st, spread_pct, vol_24h)
+            signal = should_buy_scalp(st_ind, trend_st, spread_pct, vol_24h)
+
+            if signal and score >= BUY_SCORE_MIN:
+                candidates.append({
+                    "exchange": exchange_id,
+                    "symbol": sym,
+                    "key": key,
+                    "score": score,
+                    "price": price,
+                    "spread": spread_pct,
+                    "quote_vol": vol_24h,
+                    "rsi": float(st_ind.get("rsi", 0.0)),
+                    "vol_ratio": float(st_ind.get("volume_ratio", 0.0)),
+                    "ema_fast": float(st_ind.get("ema_fast", 0.0)),
+                    "ema_slow": float(st_ind.get("ema_slow", 0.0)),
+                    "trend_ema": float(trend_st.get("trend_ema", 0.0)),
+                })
+        except Exception as e:
+            print(f"candidate error {exchange_id} {sym}: {e}")
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates[:MAX_CANDIDATES_PER_EXCHANGE]
+
+
 # ================== One Exchange Cycle ==================
 def process_exchange(exchange, exchange_id: str, symbols):
     usdt_free = get_balance_free(exchange, "USDT")
@@ -1224,7 +1392,6 @@ def process_exchange(exchange, exchange_id: str, symbols):
             last_error=""
         )
 
-        # ================== SELL ==================
         if qty_effective > 0:
             if not in_cooldown(key):
                 if gross >= REQUIRED_GROSS_TP_PCT and net >= MIN_NET_PROFIT_PCT:
@@ -1272,56 +1439,16 @@ def process_exchange(exchange, exchange_id: str, symbols):
             )
             continue
 
-        # ================== BUY ==================
-        open_pos = count_open_positions_wallet(exchange, exchange_id, symbols)
-        buy_signal = should_buy_scalp(st_ind, trend_st, spread_pct, vol_24h)
-
-        if open_pos >= MAX_OPEN_POSITIONS:
-            maybe_debug_log(key, f"[{exchange_id} {sym}] BUY blocked: open_pos={open_pos} >= MAX_OPEN_POSITIONS={MAX_OPEN_POSITIONS}")
-            continue
-
-        if usdt_free < MIN_USDT_FREE_TO_BUY:
-            maybe_debug_log(key, f"[{exchange_id} {sym}] BUY blocked: usdt_free={usdt_free:.2f} < MIN_USDT_FREE_TO_BUY={MIN_USDT_FREE_TO_BUY}")
-            continue
-
-        if in_cooldown(key):
-            maybe_debug_log(key, f"[{exchange_id} {sym}] BUY blocked: cooldown active")
-            continue
-
-        if not st_ind.get("warm", False):
-            maybe_debug_log(key, f"[{exchange_id} {sym}] BUY blocked: indicators not warm yet")
-            continue
-
-        if REQUIRE_TREND_FILTER == "1" and not trend_st.get("warm", False):
-            maybe_debug_log(key, f"[{exchange_id} {sym}] BUY blocked: trend not warm yet")
-            continue
-
-        if not buy_signal:
-            maybe_debug_log(
-                key,
-                f"[{exchange_id} {sym}] NO BUY SIGNAL | "
-                f"price={price:.6f} rsi={st_ind.get('rsi', 0):.2f} "
-                f"ema_fast={st_ind.get('ema_fast', 0):.6f} "
-                f"ema_slow={st_ind.get('ema_slow', 0):.6f} "
-                f"volRatio={st_ind.get('volume_ratio', 0):.2f} "
-                f"trend_ok={trend_st.get('trend_ok', False)} "
-                f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
-            )
-            continue
-
-        tg_send(
-            f"🟢 SCALP SIGNAL {exchange_id} {sym} | rsi={st_ind['rsi']:.1f} "
-            f"ema{EMA_FAST}={st_ind['ema_fast']:.6f} ema{EMA_SLOW}={st_ind['ema_slow']:.6f} "
-            f"trendEMA{TREND_EMA}={trend_st.get('trend_ema', 0):.6f} "
+        maybe_debug_log(
+            key,
+            f"[{exchange_id} {sym}] NO BUY SIGNAL | "
+            f"price={price:.6f} rsi={st_ind.get('rsi', 0):.2f} "
+            f"ema_fast={st_ind.get('ema_fast', 0):.6f} "
+            f"ema_slow={st_ind.get('ema_slow', 0):.6f} "
             f"volRatio={st_ind.get('volume_ratio', 0):.2f} "
-            f"spread={spread_pct:.3f}% reqTP≈{REQUIRED_GROSS_TP_PCT:.2f}%"
+            f"trend_ok={trend_st.get('trend_ok', False)} "
+            f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f}"
         )
-
-        if safe_buy(exchange, exchange_id, sym, price):
-            mark_trade(key)
-            usdt_free = get_balance_free(exchange, "USDT")
-
-        time.sleep(1)
 
 
 # ================== Main ==================
@@ -1337,7 +1464,8 @@ def main():
     tg_send(
         f"🤖 <b>تم تشغيل البوت</b>\n"
         f"الوضع الحالي: <b>{MODE}</b>\n"
-        f"المنصات: <b>{', '.join(ACTIVE_EXCHANGES)}</b>"
+        f"المنصات: <b>{', '.join(ACTIVE_EXCHANGES)}</b>\n"
+        f"عدد الأزواج: <b>{len(normalized_symbols)}</b>"
     )
 
     if TP_PCT < (BREAKEVEN_PCT + MIN_NET_PROFIT_PCT):
@@ -1379,6 +1507,8 @@ def main():
 
             send_periodic_report_if_due()
 
+            all_candidates = []
+
             for ex_id, ex in exchanges.items():
                 try:
                     process_exchange(ex, ex_id, normalized_symbols)
@@ -1389,6 +1519,39 @@ def main():
                     tg_send("❌ " + err)
                     set_status(last_error=err, last_action="error")
                     time.sleep(5)
+
+            for ex_id, ex in exchanges.items():
+                try:
+                    candidates = collect_exchange_candidates(ex, ex_id, normalized_symbols)
+                    all_candidates.extend(candidates)
+                except Exception as ex_err:
+                    print(f"candidate scan error {ex_id}: {ex_err}")
+
+            send_hourly_market_report_if_due(all_candidates)
+
+            if all_candidates:
+                best = sorted(all_candidates, key=lambda x: x["score"], reverse=True)[0]
+                best_ex_id = best["exchange"]
+                best_ex = exchanges.get(best_ex_id)
+
+                if best_ex:
+                    best_key = best["key"]
+                    open_pos = count_open_positions_wallet(best_ex, best_ex_id, normalized_symbols)
+                    usdt_free = get_balance_free(best_ex, "USDT")
+
+                    if open_pos < MAX_OPEN_POSITIONS and usdt_free >= MIN_USDT_FREE_TO_BUY and not in_cooldown(best_key):
+                        tg_send(
+                            f"🎯 <b>أفضل فرصة حالية</b>\n"
+                            f"المنصة: <b>{best_ex_id}</b>\n"
+                            f"الزوج: <b>{best['symbol']}</b>\n"
+                            f"Score: <b>{best['score']:.1f}</b>\n"
+                            f"RSI: <b>{best['rsi']:.1f}</b>\n"
+                            f"VolRatio: <b>{best['vol_ratio']:.2f}</b>\n"
+                            f"Spread: <b>{best['spread']:.3f}%</b>"
+                        )
+
+                        if safe_buy(best_ex, best_ex_id, best["symbol"], best["price"]):
+                            mark_trade(best_key)
 
             time.sleep(CHECK_INTERVAL)
 
