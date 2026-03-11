@@ -58,25 +58,27 @@ ENABLE_TRADING = getenv_str("ENABLE_TRADING", "0")
 LIVE_TRADING = getenv_str("LIVE_TRADING", "0")
 MODE = "live" if (ENABLE_TRADING == "1" or LIVE_TRADING == "1") else "paper"
 
-DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT"
+# تقليل الأزواج مؤقتًا لتحسين الجودة
+DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,XRPUSDT"
 SYMBOLS = getenv_str("SYMBOLS", DEFAULT_SYMBOLS)
 SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
 
 # ================== Strategy Params ==================
 BUY_USDT = getenv_float("BUY_USDT", 12.0)
 
-TP_PCT = getenv_float("TP_PCT", 1.80)          # gross TP
-SL_PCT = getenv_float("SL_PCT", 0.90)          # gross SL
-CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 12.0)
+# نسخة أخف وأسرع من السابقة
+TP_PCT = getenv_float("TP_PCT", 1.25)          # gross TP
+SL_PCT = getenv_float("SL_PCT", 0.55)          # gross SL
+CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 8.0)
 
 MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 15.0)
-MAX_OPEN_POSITIONS = getenv_int("MAX_OPEN_POSITIONS", 2)
-COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 300)
+MAX_OPEN_POSITIONS = getenv_int("MAX_OPEN_POSITIONS", 1)
+COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 180)
 
 # Fees / slippage
 FEE_PCT = getenv_float("FEE_PCT", 0.10)
 SLIPPAGE_PCT = getenv_float("SLIPPAGE_PCT", 0.12)
-MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.70)
+MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.35)
 
 BREAKEVEN_PCT = (2.0 * FEE_PCT) + SLIPPAGE_PCT
 REQUIRED_GROSS_TP_PCT = max(TP_PCT, BREAKEVEN_PCT + MIN_NET_PROFIT_PCT)
@@ -98,8 +100,8 @@ EMA_FAST = getenv_int("EMA_FAST", 9)
 EMA_SLOW = getenv_int("EMA_SLOW", 21)
 RSI_PERIOD = getenv_int("RSI_PERIOD", 14)
 
-RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 52.0)
-RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 60.0)
+RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 50.0)
+RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 62.0)
 
 EXIT_ON_EMA_CROSSDOWN = getenv_str("EXIT_ON_EMA_CROSSDOWN", "1")
 EXIT_RSI_OVERBOUGHT = getenv_float("EXIT_RSI_OVERBOUGHT", 74.0)
@@ -112,18 +114,18 @@ TREND_REFRESH_SEC = getenv_int("TREND_REFRESH_SEC", 90)
 REQUIRE_TREND_FILTER = getenv_str("REQUIRE_TREND_FILTER", "1")
 
 # Market quality filters
-MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.10)
+MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.12)
 MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 50000000.0)
 
 # Volume / momentum filters
 VOLUME_LOOKBACK = getenv_int("VOLUME_LOOKBACK", 20)
-MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 1.15)
+MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 0.90)
 REQUIRE_BULL_CANDLE = getenv_str("REQUIRE_BULL_CANDLE", "1")
 
 # Trailing
 ENABLE_TRAILING = getenv_str("ENABLE_TRAILING", "1")
-TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.80)
-TRAILING_GIVEBACK_PCT = getenv_float("TRAILING_GIVEBACK_PCT", 0.30)
+TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.45)
+TRAILING_GIVEBACK_PCT = getenv_float("TRAILING_GIVEBACK_PCT", 0.18)
 
 # Wallet sync / manual positions
 SYNC_EXISTING_POSITIONS = getenv_str("SYNC_EXISTING_POSITIONS", "1")
@@ -131,10 +133,10 @@ MANAGE_UNKNOWN_ENTRY = getenv_str("MANAGE_UNKNOWN_ENTRY", "1")
 TRADES_FETCH_LIMIT = getenv_int("TRADES_FETCH_LIMIT", 1000)
 
 # Early exit
-EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.35)
+EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.18)
 
 # ================== Arabic Report Settings ==================
-REPORT_INTERVAL_SEC = getenv_int("REPORT_INTERVAL_SEC", 86400)   # 24 ساعة
+REPORT_INTERVAL_SEC = getenv_int("REPORT_INTERVAL_SEC", 86400)
 SEND_REPORT_ON_EACH_SELL = getenv_str("SEND_REPORT_ON_EACH_SELL", "1")
 SEND_DAILY_REPORT = getenv_str("SEND_DAILY_REPORT", "1")
 
@@ -184,9 +186,6 @@ def fmt_pct(x: float) -> str:
 
 
 def estimate_trade_pnl_usdt(entry: float, exit_price: float, qty: float) -> float:
-    """
-    ربح/خسارة تقريبي بعد خصم عمولتي شراء وبيع.
-    """
     if entry <= 0 or exit_price <= 0 or qty <= 0:
         return 0.0
 
@@ -263,14 +262,12 @@ def build_symbol_ranking_text():
 def build_arabic_analysis():
     total = REPORT_STATE["sells"]
     wins = REPORT_STATE["wins"]
-    losses = REPORT_STATE["losses"]
     profit = REPORT_STATE["total_profit_usdt"]
 
     if total == 0:
         return "لا توجد صفقات بيع مغلقة بعد، لذلك ما زال الحكم على الأداء مبكرًا."
 
     win_rate = (wins / total) * 100 if total > 0 else 0.0
-
     notes = []
 
     if profit > 0:
@@ -285,12 +282,12 @@ def build_arabic_analysis():
     elif win_rate >= 50:
         notes.append("نسبة النجاح مقبولة، لكن يمكن تحسين التصفية قبل الدخول.")
     else:
-        notes.append("نسبة النجاح منخفضة، والأفضل تشديد شروط الإشارة وتقليل الدخولات الضعيفة.")
+        notes.append("نسبة النجاح منخفضة، والأفضل تقليل عدد الأزواج أو التشدد قليلًا في الإشارات الضعيفة.")
 
     if profit > 5:
-        notes.append("الربح اليومي جيد، ويمكن التفكير بزيادة مدروسة لحجم الصفقة فقط إذا بقيت المخاطرة منضبطة.")
+        notes.append("الربح اليومي جيد، حافظ على نفس حجم الصفقة حاليًا دون زيادة متسرعة.")
     elif profit < -3:
-        notes.append("يفضل تخفيف المخاطرة أو تقليل عدد الأزواج مؤقتًا حتى يعود الأداء للاستقرار.")
+        notes.append("يفضل تخفيف المخاطرة أو إيقاف بعض الأزواج مؤقتًا حتى يعود الأداء للاستقرار.")
 
     return "\n- " + "\n- ".join(notes)
 
@@ -330,7 +327,7 @@ def build_daily_report_message():
         f"💰 <b>صافي الربح:</b> {fmt_usdt(total_profit)}\n"
         f"🏆 <b>أفضل صفقة:</b> {best_text}\n"
         f"⚠️ <b>أسوأ صفقة:</b> {worst_text}\n\n"
-        f"📌 <b>أفضل الأزواج:</b>\n{build_symbol_ranking_text()}\n\n"
+        f"📌 <b>ترتيب الأزواج:</b>\n{build_symbol_ranking_text()}\n\n"
         f"🧠 <b>التحليل:</b>{build_arabic_analysis()}"
     )
     return msg
@@ -364,11 +361,7 @@ def send_sell_analysis_message(sym: str, qty: float, entry: float, exit_price: f
         f"💵 <b>الربح/الخسارة التقريبي:</b> {fmt_usdt(pnl_usdt)}\n"
         f"📈 <b>التغير الإجمالي:</b> {fmt_pct(gross_pct)}\n"
         f"🧾 <b>التغير الصافي التقريبي بعد الرسوم:</b> {fmt_pct(net_pct_est)}\n"
-        f"📝 <b>سبب الخروج:</b> {reason}\n\n"
-        f"🧠 <b>تحليل سريع:</b>\n"
-        f"- تم إغلاق الصفقة بناءً على شرط النظام الحالي.\n"
-        f"- هذه النتيجة {'إيجابية' if pnl_usdt >= 0 else 'سلبية'} بالنسبة لهذه العملية.\n"
-        f"- يفضّل متابعة التقرير الدوري لمعرفة أداء جميع الأزواج بشكل مجمّع."
+        f"📝 <b>سبب الخروج:</b> {reason}"
     )
     tg_send(msg)
 
@@ -595,9 +588,6 @@ def count_open_positions_wallet(client: Client) -> int:
 
 # ================== Position From Trade History ==================
 def build_position_from_trades(client: Client, sym: str):
-    """
-    يحاول استخراج متوسط الدخول الفعلي من سجل التداول.
-    """
     asset = base_asset(sym)
     wallet_qty = get_balance_free(client, asset)
 
@@ -624,7 +614,6 @@ def build_position_from_trades(client: Client, sym: str):
 
     qty = 0.0
     cost = 0.0
-
     trades = sorted(trades, key=lambda x: int(x.get("time", 0) or 0))
 
     for tr in trades:
@@ -896,30 +885,38 @@ def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float) -
     cross_up = (pef <= pes) and (ef > es)
     aligned_up = ef > es and close > ef
     rsi_ok = (RSI_BUY_MIN <= rsi <= RSI_BUY_MAX)
-    volume_ok = vol_ratio >= MIN_VOLUME_RATIO
     bull_candle_ok = (close >= open_) if REQUIRE_BULL_CANDLE == "1" else True
+    volume_ok = vol_ratio >= MIN_VOLUME_RATIO
 
-    strong_signal = (cross_up and rsi_ok and bull_candle_ok and volume_ok) or (
-        aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= (MIN_VOLUME_RATIO + 0.10)
+    signal = (
+        cross_up and rsi_ok and bull_candle_ok and volume_ok
+    ) or (
+        aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= 0.95 and rsi <= 58
     )
 
-    return strong_signal
+    return signal
 
 
 def should_exit_early(st) -> bool:
     if not st.get("warm"):
         return False
 
+    pef = st["prev_ema_fast"]
+    pes = st["prev_ema_slow"]
+    ef = st["ema_fast"]
+    es = st["ema_slow"]
+    rsi = st["rsi"]
+    close = st["last_close"]
+
     if EXIT_ON_EMA_CROSSDOWN == "1":
-        pef = st["prev_ema_fast"]
-        pes = st["prev_ema_slow"]
-        ef = st["ema_fast"]
-        es = st["ema_slow"]
         cross_down = (pef >= pes) and (ef < es)
         if cross_down:
             return True
 
-    if st["rsi"] >= EXIT_RSI_OVERBOUGHT:
+    if rsi >= EXIT_RSI_OVERBOUGHT:
+        return True
+
+    if close < ef and rsi < 50:
         return True
 
     return False
@@ -992,7 +989,7 @@ def safe_buy(client: Client, sym: str, market_price_hint: float) -> bool:
         tg_send(f"🟢 PAPER BOUGHT {sym} qty={qty_paper:.6f} entry={market_price_hint:.6f}")
         return True
 
-    step, min_qty, min_notional = get_lot_step(client, sym)
+    _, _, min_notional = get_lot_step(client, sym)
     if min_notional > 0 and BUY_USDT < (min_notional + 1.0):
         tg_send(f"⚠️ BUY blocked {sym}: BUY_USDT too small vs minNotional={min_notional}")
         return False
@@ -1143,7 +1140,7 @@ def main():
 
                 asset = base_asset(sym)
                 qty_wallet = get_balance_free(client, asset)
-                step, min_qty, min_notional = get_lot_step(client, sym)
+                _, _, min_notional = get_lot_step(client, sym)
 
                 if DUST_IGNORE == "1" and is_dust(qty_wallet, price, min_notional):
                     qty_effective = 0.0
