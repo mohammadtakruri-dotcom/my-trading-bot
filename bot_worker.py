@@ -161,6 +161,16 @@ REPORT_STATE = {
 }
 
 
+# ================== Cooldown ==================
+def in_cooldown(key: str) -> bool:
+    last_ts = int(LAST_TRADE_TS.get(key, 0) or 0)
+    return (time.time() - last_ts) < COOLDOWN_SEC
+
+
+def mark_trade(key: str):
+    LAST_TRADE_TS[key] = int(time.time())
+
+
 # ================== Telegram ==================
 def _telegram_allowed(msg: str) -> bool:
     if TELEGRAM_TRADES_ONLY != "1":
