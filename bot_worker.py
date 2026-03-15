@@ -140,6 +140,11 @@ OLD_POSITION_TAKE_PROFIT_PCT = getenv_float("OLD_POSITION_TAKE_PROFIT_PCT", 1.10
 
 TELEGRAM_TRADES_ONLY = getenv_str("TELEGRAM_TRADES_ONLY", "1")
 
+# ===== Time-based exit =====
+MAX_HOLD_HOURS = getenv_float("MAX_HOLD_HOURS", 12.0)
+HARD_MAX_HOLD_HOURS = getenv_float("HARD_MAX_HOLD_HOURS", 24.0)
+TIME_EXIT_MIN_NET_PCT = getenv_float("TIME_EXIT_MIN_NET_PCT", 0.20)
+
 
 # ================== Global State ==================
 POSITIONS = {}
@@ -169,6 +174,14 @@ def in_cooldown(key: str) -> bool:
 
 def mark_trade(key: str):
     LAST_TRADE_TS[key] = int(time.time())
+
+
+def position_age_hours(key: str) -> float:
+    pos = POSITIONS.get(key, {}) or {}
+    opened_at = int(pos.get("opened_at", 0) or 0)
+    if opened_at <= 0:
+        return 0.0
+    return (time.time() - opened_at) / 3600.0
 
 
 # ================== Telegram ==================
@@ -594,6 +607,7 @@ def build_position_from_trades(exchange, exchange_id: str, sym: str):
                 "entry_known": False,
                 "source": "fallback",
                 "opened_by_bot": False,
+                "opened_at": 0,
             }
         return None
 
@@ -636,6 +650,7 @@ def build_position_from_trades(exchange, exchange_id: str, sym: str):
                 "entry_known": False,
                 "source": "fallback",
                 "opened_by_bot": False,
+                "opened_at": 0,
             }
         return None
 
@@ -648,6 +663,7 @@ def build_position_from_trades(exchange, exchange_id: str, sym: str):
         "entry_known": True,
         "source": "history",
         "opened_by_bot": False,
+        "opened_at": 0,
     }
 
 
@@ -673,8 +689,13 @@ def sync_one_position(exchange, exchange_id: str, sym: str):
         return None
 
     pos["peak_net"] = float(old.get("peak_net", 0.0) or 0.0)
-    pos["highest_price"] = max(price, float(old.get("highest_price", 0.0) or 0.0), float(pos.get("highest_price", 0.0) or 0.0))
+    pos["highest_price"] = max(
+        price,
+        float(old.get("highest_price", 0.0) or 0.0),
+        float(pos.get("highest_price", 0.0) or 0.0)
+    )
     pos["opened_by_bot"] = bool(old.get("opened_by_bot", False))
+    pos["opened_at"] = int(old.get("opened_at", 0) or 0)
     POSITIONS[key] = pos
     return pos
 
@@ -979,6 +1000,7 @@ def safe_buy(exchange, exchange_id: str, sym: str, market_price_hint: float) -> 
             "entry_known": True,
             "source": "paper",
             "opened_by_bot": True,
+            "opened_at": int(time.time()),
         }
         add_trade(lbl, "BUY", qty_paper, market_price_hint, "PAPER scalp buy")
         update_report_stats_on_buy(lbl)
@@ -1004,6 +1026,7 @@ def safe_buy(exchange, exchange_id: str, sym: str, market_price_hint: float) -> 
         pos = sync_one_position(exchange, exchange_id, sym)
         if pos and float(pos.get("qty", 0) or 0) > 0:
             pos["opened_by_bot"] = True
+            pos["opened_at"] = int(time.time())
             POSITIONS[key] = pos
             exec_qty = float(pos.get("qty", 0) or 0)
             exec_price = float(pos.get("entry", market_price_hint) or market_price_hint)
@@ -1022,6 +1045,7 @@ def safe_buy(exchange, exchange_id: str, sym: str, market_price_hint: float) -> 
         "entry_known": True,
         "source": "live",
         "opened_by_bot": True,
+        "opened_at": int(time.time()),
     }
     update_report_stats_on_buy(lbl)
     tg_send(f"🟢 BOUGHT {lbl}\nqty={exec_qty:.6f}\nentry={exec_price:.6f}")
@@ -1180,6 +1204,23 @@ def process_exchange(exchange, exchange_id: str, symbols):
         )
 
         if qty_effective > 0 and not in_cooldown(key):
+            age_h = position_age_hours(key)
+            opened_by_bot = bool(pos_info.get("opened_by_bot", False))
+
+            # ===== Time Exit =====
+            if opened_by_bot:
+                if age_h >= HARD_MAX_HOLD_HOURS:
+                    if safe_sell(exchange, exchange_id, sym, price, f"TIME EXIT hard {age_h:.1f}h net={net:.2f}%"):
+                        mark_trade(key)
+                        time.sleep(1)
+                    continue
+
+                if age_h >= MAX_HOLD_HOURS and net < TIME_EXIT_MIN_NET_PCT:
+                    if safe_sell(exchange, exchange_id, sym, price, f"TIME EXIT soft {age_h:.1f}h net={net:.2f}%"):
+                        mark_trade(key)
+                        time.sleep(1)
+                    continue
+
             if gross >= REQUIRED_GROSS_TP_PCT and net >= MIN_NET_PROFIT_PCT:
                 if safe_sell(exchange, exchange_id, sym, price, f"SCALP TP gross={gross:.2f}% net={net:.2f}%"):
                     mark_trade(key)
