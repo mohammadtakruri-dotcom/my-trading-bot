@@ -692,7 +692,7 @@ def sync_one_position(exchange, exchange_id: str, sym: str):
     pos["highest_price"] = max(
         price,
         float(old.get("highest_price", 0.0) or 0.0),
-        float(pos.get("highest_price", 0.0) or 0.0)
+        float(pos.get("highest_price", 0.0) or 0.0),
     )
     pos["opened_by_bot"] = bool(old.get("opened_by_bot", False))
     pos["opened_at"] = int(old.get("opened_at", 0) or 0)
@@ -745,23 +745,26 @@ def extend_symbols_with_wallet_balances(exchange, symbols):
 def refresh_indicators(exchange, exchange_id: str, sym: str):
     key = pair_key(exchange_id, sym)
     now = int(time.time())
-    st = STATE.setdefault(key, {
-        "closes": deque(maxlen=500),
-        "opens": deque(maxlen=500),
-        "volumes": deque(maxlen=500),
-        "last_klines_ts": 0,
-        "ema_fast": 0.0,
-        "ema_slow": 0.0,
-        "prev_ema_fast": 0.0,
-        "prev_ema_slow": 0.0,
-        "rsi": 0.0,
-        "last_close": 0.0,
-        "last_open": 0.0,
-        "last_volume": 0.0,
-        "avg_volume": 0.0,
-        "volume_ratio": 0.0,
-        "warm": False
-    })
+    st = STATE.setdefault(
+        key,
+        {
+            "closes": deque(maxlen=500),
+            "opens": deque(maxlen=500),
+            "volumes": deque(maxlen=500),
+            "last_klines_ts": 0,
+            "ema_fast": 0.0,
+            "ema_slow": 0.0,
+            "prev_ema_fast": 0.0,
+            "prev_ema_slow": 0.0,
+            "rsi": 0.0,
+            "last_close": 0.0,
+            "last_open": 0.0,
+            "last_volume": 0.0,
+            "avg_volume": 0.0,
+            "volume_ratio": 0.0,
+            "warm": False,
+        },
+    )
 
     if (now - st["last_klines_ts"]) < KLINES_REFRESH_SEC and st["warm"]:
         return st
@@ -792,7 +795,7 @@ def refresh_indicators(exchange, exchange_id: str, sym: str):
 
     vols = list(st["volumes"])
     if len(vols) >= max(2, VOLUME_LOOKBACK):
-        base_vols = vols[-(VOLUME_LOOKBACK + 1):-1]
+        base_vols = vols[-(VOLUME_LOOKBACK + 1) : -1]
         avg_vol = sum(base_vols) / len(base_vols) if base_vols else 0.0
         st["avg_volume"] = avg_vol
         st["volume_ratio"] = (st["last_volume"] / avg_vol) if avg_vol > 0 else 0.0
@@ -836,13 +839,16 @@ def refresh_indicators(exchange, exchange_id: str, sym: str):
 def refresh_trend(exchange, exchange_id: str, sym: str):
     key = pair_key(exchange_id, sym)
     now = int(time.time())
-    st = TREND_STATE.setdefault(key, {
-        "last_ts": 0,
-        "trend_ema": 0.0,
-        "last_close": 0.0,
-        "trend_ok": False,
-        "warm": False
-    })
+    st = TREND_STATE.setdefault(
+        key,
+        {
+            "last_ts": 0,
+            "trend_ema": 0.0,
+            "last_close": 0.0,
+            "trend_ok": False,
+            "warm": False,
+        },
+    )
 
     if (now - st["last_ts"]) < TREND_REFRESH_SEC and st["warm"]:
         return st
@@ -1137,13 +1143,15 @@ def collect_exchange_candidates(exchange, exchange_id: str, symbols):
             signal = should_buy_scalp(st_ind, trend_st, spread_pct, vol_24h)
 
             if signal and score >= BUY_SCORE_MIN:
-                candidates.append({
-                    "exchange": exchange_id,
-                    "symbol": sym,
-                    "key": key,
-                    "score": score,
-                    "price": price,
-                })
+                candidates.append(
+                    {
+                        "exchange": exchange_id,
+                        "symbol": sym,
+                        "key": key,
+                        "score": score,
+                        "price": price,
+                    }
+                )
         except Exception:
             continue
 
