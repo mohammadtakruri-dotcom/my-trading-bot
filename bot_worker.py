@@ -145,6 +145,18 @@ MAX_HOLD_HOURS = getenv_float("MAX_HOLD_HOURS", 12.0)
 HARD_MAX_HOLD_HOURS = getenv_float("HARD_MAX_HOLD_HOURS", 24.0)
 TIME_EXIT_MIN_NET_PCT = getenv_float("TIME_EXIT_MIN_NET_PCT", 0.20)
 
+# ===== Smart trailing profit lock =====
+SMART_TRAILING = getenv_str("SMART_TRAILING", "1")
+
+TRAIL_LVL1_ACTIVATE = getenv_float("TRAIL_LVL1_ACTIVATE", 0.80)
+TRAIL_LVL1_GIVEBACK = getenv_float("TRAIL_LVL1_GIVEBACK", 0.35)
+
+TRAIL_LVL2_ACTIVATE = getenv_float("TRAIL_LVL2_ACTIVATE", 1.50)
+TRAIL_LVL2_GIVEBACK = getenv_float("TRAIL_LVL2_GIVEBACK", 0.25)
+
+TRAIL_LVL3_ACTIVATE = getenv_float("TRAIL_LVL3_ACTIVATE", 2.50)
+TRAIL_LVL3_GIVEBACK = getenv_float("TRAIL_LVL3_GIVEBACK", 0.20)
+
 
 # ================== Global State ==================
 POSITIONS = {}
@@ -795,7 +807,7 @@ def refresh_indicators(exchange, exchange_id: str, sym: str):
 
     vols = list(st["volumes"])
     if len(vols) >= max(2, VOLUME_LOOKBACK):
-        base_vols = vols[-(VOLUME_LOOKBACK + 1) : -1]
+        base_vols = vols[-(VOLUME_LOOKBACK + 1): -1]
         avg_vol = sum(base_vols) / len(base_vols) if base_vols else 0.0
         st["avg_volume"] = avg_vol
         st["volume_ratio"] = (st["last_volume"] / avg_vol) if avg_vol > 0 else 0.0
@@ -947,12 +959,31 @@ def update_trailing_state(key: str, price: float, net: float):
 def trailing_exit_triggered(key: str, net: float) -> bool:
     if ENABLE_TRAILING != "1":
         return False
+
     pos = POSITIONS.get(key)
     if not pos:
         return False
+
     peak_net = float(pos.get("peak_net", -999.0))
+
+    if SMART_TRAILING == "1":
+        giveback = None
+
+        if peak_net >= TRAIL_LVL3_ACTIVATE:
+            giveback = TRAIL_LVL3_GIVEBACK
+        elif peak_net >= TRAIL_LVL2_ACTIVATE:
+            giveback = TRAIL_LVL2_GIVEBACK
+        elif peak_net >= TRAIL_LVL1_ACTIVATE:
+            giveback = TRAIL_LVL1_GIVEBACK
+
+        if giveback is None:
+            return False
+
+        return (peak_net - net) >= giveback
+
     if peak_net < TRAILING_ACTIVATE_NET_PCT:
         return False
+
     return (peak_net - net) >= TRAILING_GIVEBACK_PCT
 
 
@@ -1237,7 +1268,23 @@ def process_exchange(exchange, exchange_id: str, symbols):
 
             if ENABLE_TRAILING == "1" and trailing_exit_triggered(key, net):
                 peak_net = float(POSITIONS.get(key, {}).get("peak_net", 0.0) or 0.0)
-                if safe_sell(exchange, exchange_id, sym, price, f"SCALP trailing peak_net={peak_net:.2f}% net={net:.2f}%"):
+
+                giveback_used = TRAILING_GIVEBACK_PCT
+                if SMART_TRAILING == "1":
+                    if peak_net >= TRAIL_LVL3_ACTIVATE:
+                        giveback_used = TRAIL_LVL3_GIVEBACK
+                    elif peak_net >= TRAIL_LVL2_ACTIVATE:
+                        giveback_used = TRAIL_LVL2_GIVEBACK
+                    elif peak_net >= TRAIL_LVL1_ACTIVATE:
+                        giveback_used = TRAIL_LVL1_GIVEBACK
+
+                if safe_sell(
+                    exchange,
+                    exchange_id,
+                    sym,
+                    price,
+                    f"SMART TRAILING peak_net={peak_net:.2f}% net={net:.2f}% giveback={giveback_used:.2f}%"
+                ):
                     mark_trade(key)
                     time.sleep(1)
                 continue
