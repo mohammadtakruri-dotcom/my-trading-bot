@@ -11,6 +11,28 @@ import ccxt
 from db import init_db, set_status, add_trade
 
 
+# ================== Optional .env Loader ==================
+def load_dotenv_file(path: str = ".env"):
+    try:
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and os.getenv(k) is None:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
+
+load_dotenv_file()
+
+
 # ================== Safe ENV Parsers ==================
 def getenv_str(name: str, default: str = "") -> str:
     v = os.getenv(name)
@@ -68,7 +90,7 @@ def normalize_symbol(sym: str) -> str:
     return s
 
 
-def pair_key(exchange_id: str, sym: str):
+def pair_key(exchange_id: str, sym: str) -> str:
     return f"{exchange_id}:{sym}"
 
 
@@ -150,111 +172,104 @@ DEFAULT_SYMBOLS = (
     "APTUSDT,NEARUSDT,ARBUSDT,OPUSDT,FILUSDT,ETCUSDT,SUIUSDT,TRXUSDT,PEPEUSDT"
 )
 SYMBOLS = getenv_str("SYMBOLS", DEFAULT_SYMBOLS)
-SYMBOLS = [s.strip().upper() for s in SYMBOLS.split(",") if s.strip()]
+SYMBOLS = [normalize_symbol(s) for s in SYMBOLS.split(",") if s.strip()]
 
-# هجومي
 BUY_USDT = getenv_float("BUY_USDT", 24.0)
 BUY_USDT_MIN = getenv_float("BUY_USDT_MIN", 18.0)
 BUY_USDT_MAX = getenv_float("BUY_USDT_MAX", 40.0)
 
-TP_PCT = getenv_float("TP_PCT", 0.70)
-SL_PCT = getenv_float("SL_PCT", 1.60)
+TP_PCT = getenv_float("TP_PCT", 0.55)
+SL_PCT = getenv_float("SL_PCT", 1.90)
 CHECK_INTERVAL = getenv_float("CHECK_INTERVAL", 4.0)
-MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 10.0)
+MIN_USDT_FREE_TO_BUY = getenv_float("MIN_USDT_FREE_TO_BUY", 8.0)
 
 MAX_OPEN_POSITIONS = getenv_int("MAX_OPEN_POSITIONS", 8)
 MAX_NEW_BUYS_PER_CYCLE = getenv_int("MAX_NEW_BUYS_PER_CYCLE", 4)
-COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 10)
+COOLDOWN_SEC = getenv_int("COOLDOWN_SEC", 8)
 
 FEE_PCT = getenv_float("FEE_PCT", 0.10)
 SLIPPAGE_PCT = getenv_float("SLIPPAGE_PCT", 0.12)
-MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.12)
+MIN_NET_PROFIT_PCT = getenv_float("MIN_NET_PROFIT_PCT", 0.08)
 
 BREAKEVEN_PCT = (2.0 * FEE_PCT) + SLIPPAGE_PCT
 REQUIRED_GROSS_TP_PCT = max(TP_PCT, BREAKEVEN_PCT + MIN_NET_PROFIT_PCT)
-
-DUST_IGNORE = getenv_str("DUST_IGNORE", "0")
-DUST_IGNORE_BUFFER = getenv_float("DUST_IGNORE_BUFFER", 0.30)
 
 HEARTBEAT_SEC = getenv_int("HEARTBEAT_SEC", 30)
 
 KLINES_INTERVAL = getenv_str("KLINES_INTERVAL", "3m")
 KLINES_LIMIT = getenv_int("KLINES_LIMIT", 220)
-KLINES_REFRESH_SEC = getenv_int("KLINES_REFRESH_SEC", 20)
+KLINES_REFRESH_SEC = getenv_int("KLINES_REFRESH_SEC", 15)
 
-EMA_FAST = getenv_int("EMA_FAST", 7)
-EMA_SLOW = getenv_int("EMA_SLOW", 18)
+EMA_FAST = getenv_int("EMA_FAST", 5)
+EMA_SLOW = getenv_int("EMA_SLOW", 13)
 RSI_PERIOD = getenv_int("RSI_PERIOD", 14)
 
-RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 40.0)
-RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 78.0)
+RSI_BUY_MIN = getenv_float("RSI_BUY_MIN", 28.0)
+RSI_BUY_MAX = getenv_float("RSI_BUY_MAX", 82.0)
 
 EXIT_ON_EMA_CROSSDOWN = getenv_str("EXIT_ON_EMA_CROSSDOWN", "1")
-EXIT_RSI_OVERBOUGHT = getenv_float("EXIT_RSI_OVERBOUGHT", 82.0)
+EXIT_RSI_OVERBOUGHT = getenv_float("EXIT_RSI_OVERBOUGHT", 86.0)
 
 TREND_INTERVAL = getenv_str("TREND_INTERVAL", "15m")
 TREND_LIMIT = getenv_int("TREND_LIMIT", 260)
 TREND_EMA = getenv_int("TREND_EMA", 200)
-TREND_REFRESH_SEC = getenv_int("TREND_REFRESH_SEC", 60)
+TREND_REFRESH_SEC = getenv_int("TREND_REFRESH_SEC", 45)
 REQUIRE_TREND_FILTER = getenv_str("REQUIRE_TREND_FILTER", "0")
 
-MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.60)
-MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 1000000.0)
+MAX_SPREAD_PCT = getenv_float("MAX_SPREAD_PCT", 0.90)
+MIN_24H_QUOTE_VOLUME = getenv_float("MIN_24H_QUOTE_VOLUME", 300000.0)
 
 VOLUME_LOOKBACK = getenv_int("VOLUME_LOOKBACK", 20)
-MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 0.30)
+MIN_VOLUME_RATIO = getenv_float("MIN_VOLUME_RATIO", 0.05)
 REQUIRE_BULL_CANDLE = getenv_str("REQUIRE_BULL_CANDLE", "0")
 
 ENABLE_TRAILING = getenv_str("ENABLE_TRAILING", "1")
-TRAILING_ACTIVATE_NET_PCT = getenv_float("TRAILING_ACTIVATE_NET_PCT", 0.25)
-TRAILING_GIVEBACK_PCT = getenv_float("TRAILING_GIVEBACK_PCT", 0.20)
+SMART_TRAILING = getenv_str("SMART_TRAILING", "1")
+
+TRAIL_LVL1_ACTIVATE = getenv_float("TRAIL_LVL1_ACTIVATE", 0.35)
+TRAIL_LVL1_GIVEBACK = getenv_float("TRAIL_LVL1_GIVEBACK", 0.22)
+TRAIL_LVL2_ACTIVATE = getenv_float("TRAIL_LVL2_ACTIVATE", 0.80)
+TRAIL_LVL2_GIVEBACK = getenv_float("TRAIL_LVL2_GIVEBACK", 0.18)
+TRAIL_LVL3_ACTIVATE = getenv_float("TRAIL_LVL3_ACTIVATE", 1.50)
+TRAIL_LVL3_GIVEBACK = getenv_float("TRAIL_LVL3_GIVEBACK", 0.14)
 
 SYNC_EXISTING_POSITIONS = getenv_str("SYNC_EXISTING_POSITIONS", "1")
 MANAGE_UNKNOWN_ENTRY = getenv_str("MANAGE_UNKNOWN_ENTRY", "1")
 TRADES_FETCH_LIMIT = getenv_int("TRADES_FETCH_LIMIT", 1000)
 
-EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.03)
+EARLY_EXIT_MIN_NET_PCT = getenv_float("EARLY_EXIT_MIN_NET_PCT", 0.01)
 
 REPORT_INTERVAL_SEC = getenv_int("REPORT_INTERVAL_SEC", 86400)
 SEND_REPORT_ON_EACH_SELL = getenv_str("SEND_REPORT_ON_EACH_SELL", "1")
 SEND_DAILY_REPORT = getenv_str("SEND_DAILY_REPORT", "1")
 
-BUY_SCORE_MIN = getenv_float("BUY_SCORE_MIN", 18.0)
-MAX_CANDIDATES_PER_EXCHANGE = getenv_int("MAX_CANDIDATES_PER_EXCHANGE", 12)
+BUY_SCORE_MIN = getenv_float("BUY_SCORE_MIN", 8.0)
+MAX_CANDIDATES_PER_EXCHANGE = getenv_int("MAX_CANDIDATES_PER_EXCHANGE", 16)
 
 AUTO_INCLUDE_WALLET_SYMBOLS = getenv_str("AUTO_INCLUDE_WALLET_SYMBOLS", "1")
 ALLOW_ONE_BUY_PER_EXCHANGE = getenv_str("ALLOW_ONE_BUY_PER_EXCHANGE", "0")
 STRICT_BEST_GLOBAL_ONLY = getenv_str("STRICT_BEST_GLOBAL_ONLY", "0")
 
-OLD_POSITION_FORCE_SELL_PCT = getenv_float("OLD_POSITION_FORCE_SELL_PCT", -3.5)
-OLD_POSITION_TAKE_PROFIT_PCT = getenv_float("OLD_POSITION_TAKE_PROFIT_PCT", 0.90)
+OLD_POSITION_FORCE_SELL_PCT = getenv_float("OLD_POSITION_FORCE_SELL_PCT", -4.0)
+OLD_POSITION_TAKE_PROFIT_PCT = getenv_float("OLD_POSITION_TAKE_PROFIT_PCT", 0.70)
 
 TELEGRAM_TRADES_ONLY = getenv_str("TELEGRAM_TRADES_ONLY", "1")
 
-MAX_HOLD_HOURS = getenv_float("MAX_HOLD_HOURS", 6.0)
-HARD_MAX_HOLD_HOURS = getenv_float("HARD_MAX_HOLD_HOURS", 12.0)
-TIME_EXIT_MIN_NET_PCT = getenv_float("TIME_EXIT_MIN_NET_PCT", 0.05)
-
-SMART_TRAILING = getenv_str("SMART_TRAILING", "1")
-TRAIL_LVL1_ACTIVATE = getenv_float("TRAIL_LVL1_ACTIVATE", 0.50)
-TRAIL_LVL1_GIVEBACK = getenv_float("TRAIL_LVL1_GIVEBACK", 0.30)
-TRAIL_LVL2_ACTIVATE = getenv_float("TRAIL_LVL2_ACTIVATE", 1.00)
-TRAIL_LVL2_GIVEBACK = getenv_float("TRAIL_LVL2_GIVEBACK", 0.22)
-TRAIL_LVL3_ACTIVATE = getenv_float("TRAIL_LVL3_ACTIVATE", 2.00)
-TRAIL_LVL3_GIVEBACK = getenv_float("TRAIL_LVL3_GIVEBACK", 0.18)
+MAX_HOLD_HOURS = getenv_float("MAX_HOLD_HOURS", 5.0)
+HARD_MAX_HOLD_HOURS = getenv_float("HARD_MAX_HOLD_HOURS", 10.0)
+TIME_EXIT_MIN_NET_PCT = getenv_float("TIME_EXIT_MIN_NET_PCT", 0.00)
 
 ATR_PERIOD = getenv_int("ATR_PERIOD", 14)
-ATR_MIN_PCT = getenv_float("ATR_MIN_PCT", 0.03)
-ATR_MAX_PCT = getenv_float("ATR_MAX_PCT", 8.00)
+ATR_MIN_PCT = getenv_float("ATR_MIN_PCT", 0.01)
+ATR_MAX_PCT = getenv_float("ATR_MAX_PCT", 12.0)
 
 ENABLE_PARTIAL_TP = getenv_str("ENABLE_PARTIAL_TP", "1")
-PARTIAL_TP_NET_PCT = getenv_float("PARTIAL_TP_NET_PCT", 0.40)
-PARTIAL_TP_SELL_RATIO = getenv_float("PARTIAL_TP_SELL_RATIO", 0.40)
+PARTIAL_TP_NET_PCT = getenv_float("PARTIAL_TP_NET_PCT", 0.28)
+PARTIAL_TP_SELL_RATIO = getenv_float("PARTIAL_TP_SELL_RATIO", 0.35)
 
 ENABLE_BREAK_EVEN = getenv_str("ENABLE_BREAK_EVEN", "1")
-BREAK_EVEN_ARM_NET_PCT = getenv_float("BREAK_EVEN_ARM_NET_PCT", 0.20)
+BREAK_EVEN_ARM_NET_PCT = getenv_float("BREAK_EVEN_ARM_NET_PCT", 0.10)
 
-# نجعل الحماية شبه معطلة افتراضيًا
 MAX_DAILY_LOSS_USDT = getenv_float("MAX_DAILY_LOSS_USDT", 100000.0)
 MAX_CONSECUTIVE_LOSSES = getenv_int("MAX_CONSECUTIVE_LOSSES", 999)
 LOSS_PAUSE_MINUTES = getenv_int("LOSS_PAUSE_MINUTES", 5)
@@ -267,8 +282,7 @@ BTC_REGIME_LIMIT = getenv_int("BTC_REGIME_LIMIT", 260)
 BTC_REGIME_EMA = getenv_int("BTC_REGIME_EMA", 200)
 BTC_REGIME_REFRESH_SEC = getenv_int("BTC_REGIME_REFRESH_SEC", 60)
 
-REENTRY_AFTER_SELL_COOLDOWN_SEC = getenv_int("REENTRY_AFTER_SELL_COOLDOWN_SEC", 5)
-
+REENTRY_AFTER_SELL_COOLDOWN_SEC = getenv_int("REENTRY_AFTER_SELL_COOLDOWN_SEC", 3)
 PRINT_CANDIDATES = getenv_str("PRINT_CANDIDATES", "1")
 
 
@@ -278,6 +292,7 @@ LAST_TRADE_TS = {}
 STATE = {}
 TREND_STATE = {}
 MARKET_REGIME_STATE = {}
+
 TRADING_GUARD = {
     "day_key": datetime.now().strftime("%Y-%m-%d"),
     "daily_pnl": 0.0,
@@ -295,7 +310,7 @@ REPORT_STATE = {
     "total_profit_usdt": 0.0,
     "best_trade": None,
     "worst_trade": None,
-    "symbols": {}
+    "symbols": {},
 }
 
 
@@ -528,29 +543,32 @@ def make_exchange(exchange_id: str):
     exchange_id = exchange_id.lower()
 
     if exchange_id == "binance":
+        api_key = getenv_str("BINANCE_API_KEY", "")
+        secret = getenv_str("BINANCE_API_SECRET", "")
+        if MODE == "live" and (not api_key or not secret):
+            raise RuntimeError("BINANCE_API_KEY أو BINANCE_API_SECRET غير موجودين")
         ex = ccxt.binance({
-            "apiKey": getenv_str("BINANCE_API_KEY", ""),
-            "secret": getenv_str("BINANCE_API_SECRET", ""),
+            "apiKey": api_key,
+            "secret": secret,
             "enableRateLimit": True,
             "options": {"defaultType": "spot"},
         })
-        if getenv_str("BINANCE_SANDBOX", "0") == "1" and hasattr(ex, "set_sandbox_mode"):
-            ex.set_sandbox_mode(True)
 
     elif exchange_id == "bybit":
+        api_key = getenv_str("BYBIT_API_KEY", "")
+        secret = getenv_str("BYBIT_API_SECRET", "")
+        if MODE == "live" and (not api_key or not secret):
+            raise RuntimeError("BYBIT_API_KEY أو BYBIT_API_SECRET غير موجودين")
         ex = ccxt.bybit({
-            "apiKey": getenv_str("BYBIT_API_KEY", ""),
-            "secret": getenv_str("BYBIT_API_SECRET", ""),
+            "apiKey": api_key,
+            "secret": secret,
             "enableRateLimit": True,
             "options": {"defaultType": "spot"},
         })
-        if getenv_str("BYBIT_SANDBOX", "0") == "1" and hasattr(ex, "set_sandbox_mode"):
-            ex.set_sandbox_mode(True)
     else:
         raise RuntimeError(f"Unsupported exchange: {exchange_id}")
 
     ex.load_markets()
-    ex.fetch_time()
     return ex
 
 
@@ -701,17 +719,14 @@ def executed_qty_from_order(exchange, order, symbol: str) -> float:
 def is_dust(qty: float, price: float, min_notional: float) -> bool:
     if qty <= 0 or min_notional <= 0:
         return False
-    return (qty * price) < (min_notional - DUST_IGNORE_BUFFER)
+    return (qty * price) < (min_notional - 0.3)
 
 
 def count_bot_open_positions(exchange_id: str) -> int:
     cnt = 0
     prefix = f"{exchange_id}:"
     for key, pos in POSITIONS.items():
-        if not key.startswith(prefix):
-            continue
-        qty = float(pos.get("qty", 0.0) or 0.0)
-        if qty > 0 and bool(pos.get("opened_by_bot", False)):
+        if key.startswith(prefix) and float(pos.get("qty", 0.0) or 0.0) > 0 and bool(pos.get("opened_by_bot", False)):
             cnt += 1
     return cnt
 
@@ -753,7 +768,6 @@ def build_position_from_trades(exchange, exchange_id: str, sym: str):
         tr_qty = float(tr.get("amount", 0) or 0)
         tr_price = float(tr.get("price", 0) or 0)
         side = str(tr.get("side", "")).lower()
-
         if tr_qty <= 0 or tr_price <= 0:
             continue
 
@@ -819,7 +833,7 @@ def sync_one_position(exchange, exchange_id: str, sym: str):
     price = get_price(exchange, sym)
     _, _, min_notional = get_lot_step(exchange, sym)
 
-    if DUST_IGNORE == "1" and is_dust(qty, price, min_notional):
+    if is_dust(qty, price, min_notional):
         POSITIONS.pop(key, None)
         return None
 
@@ -888,6 +902,7 @@ def extend_symbols_with_wallet_balances(exchange, symbols):
 def refresh_indicators(exchange, exchange_id: str, sym: str):
     key = pair_key(exchange_id, sym)
     now = int(time.time())
+
     st = STATE.setdefault(
         key,
         {
@@ -994,6 +1009,7 @@ def refresh_indicators(exchange, exchange_id: str, sym: str):
 def refresh_trend(exchange, exchange_id: str, sym: str):
     key = pair_key(exchange_id, sym)
     now = int(time.time())
+
     st = TREND_STATE.setdefault(
         key,
         {
@@ -1008,20 +1024,23 @@ def refresh_trend(exchange, exchange_id: str, sym: str):
     if (now - st["last_ts"]) < TREND_REFRESH_SEC and st["warm"]:
         return st
 
-    kl = exchange.fetch_ohlcv(sym, timeframe=TREND_INTERVAL, limit=TREND_LIMIT)
-    if len(kl) >= 2:
-        kl = kl[:-1]
+    try:
+        kl = exchange.fetch_ohlcv(sym, timeframe=TREND_INTERVAL, limit=TREND_LIMIT)
+        if len(kl) >= 2:
+            kl = kl[:-1]
 
-    closes = [float(k[4]) for k in kl]
-    if len(closes) >= TREND_EMA:
-        ema_val = sum(closes[:TREND_EMA]) / TREND_EMA
-        for p in closes[TREND_EMA:]:
-            ema_val = ema(ema_val, p, TREND_EMA)
+        closes = [float(k[4]) for k in kl]
+        if len(closes) >= TREND_EMA:
+            ema_val = sum(closes[:TREND_EMA]) / TREND_EMA
+            for p in closes[TREND_EMA:]:
+                ema_val = ema(ema_val, p, TREND_EMA)
 
-        st["trend_ema"] = ema_val
-        st["last_close"] = closes[-1]
-        st["trend_ok"] = closes[-1] > ema_val
-        st["warm"] = True
+            st["trend_ema"] = ema_val
+            st["last_close"] = closes[-1]
+            st["trend_ok"] = closes[-1] > ema_val
+            st["warm"] = True
+    except Exception:
+        pass
 
     st["last_ts"] = now
     return st
@@ -1092,12 +1111,15 @@ def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float, r
 
     cross_up = (pef <= pes) and (ef > es)
     aligned_up = ef > es and close > ef
+    bounce_buy = rsi <= 34 and close >= open_
     rsi_ok = RSI_BUY_MIN <= rsi <= RSI_BUY_MAX
     bull_candle_ok = (close >= open_) if REQUIRE_BULL_CANDLE == "1" else True
     volume_ok = vol_ratio >= MIN_VOLUME_RATIO
 
-    return (cross_up and rsi_ok and bull_candle_ok and volume_ok) or (
-        aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= 0.25 and rsi <= 75
+    return (
+        (cross_up and rsi_ok and bull_candle_ok and volume_ok)
+        or (aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= 0.02)
+        or bounce_buy
     )
 
 
@@ -1116,7 +1138,7 @@ def should_exit_early(st) -> bool:
         return True
     if rsi >= EXIT_RSI_OVERBOUGHT:
         return True
-    if close < ef and rsi < 48:
+    if close < ef and rsi < 45:
         return True
     return False
 
@@ -1129,7 +1151,6 @@ def update_trailing_state(key: str, price: float, net: float):
         pos["highest_price"] = price
     if net > float(pos.get("peak_net", -999.0)):
         pos["peak_net"] = net
-
     if ENABLE_BREAK_EVEN == "1" and net >= BREAK_EVEN_ARM_NET_PCT:
         pos["break_even_armed"] = True
 
@@ -1146,7 +1167,6 @@ def trailing_exit_triggered(key: str, net: float) -> bool:
 
     if SMART_TRAILING == "1":
         giveback = None
-
         if peak_net >= TRAIL_LVL3_ACTIVATE:
             giveback = TRAIL_LVL3_GIVEBACK
         elif peak_net >= TRAIL_LVL2_ACTIVATE:
@@ -1159,20 +1179,20 @@ def trailing_exit_triggered(key: str, net: float) -> bool:
 
         return (peak_net - net) >= giveback
 
-    if peak_net < TRAILING_ACTIVATE_NET_PCT:
-        return False
-
-    return (peak_net - net) >= TRAILING_GIVEBACK_PCT
+    return False
 
 
 def calc_buy_score(st, trend_st, spread_pct: float, quote_volume_24h: float, regime_ok: bool = True) -> float:
     if not st.get("warm"):
         return 0.0
+
     if REQUIRE_TREND_FILTER == "1":
         if not trend_st.get("warm") or not trend_st.get("trend_ok"):
             return 0.0
+
     if ENABLE_MARKET_REGIME_FILTER == "1" and not regime_ok:
         return 0.0
+
     if spread_pct > MAX_SPREAD_PCT or quote_volume_24h < MIN_24H_QUOTE_VOLUME:
         return 0.0
 
@@ -1191,26 +1211,24 @@ def calc_buy_score(st, trend_st, spread_pct: float, quote_volume_24h: float, reg
 
     cross_up = (pef <= pes) and (ef > es)
     aligned_up = ef > es and close > ef
+    bounce_buy = rsi <= 34 and close >= open_
     bull_candle = close >= open_
 
     score = 0.0
-    score += 28 if cross_up else (18 if aligned_up else 0)
-    score += 22 if RSI_BUY_MIN <= rsi <= RSI_BUY_MAX else (12 if 35 <= rsi <= 80 else 0)
-    score += clamp((vol_ratio - 0.40) * 30, 0, 20)
-    score += 10 if bull_candle or REQUIRE_BULL_CANDLE != "1" else 0
-    score += clamp((MAX_SPREAD_PCT - spread_pct) * 130, 0, 15)
+    score += 30 if cross_up else (18 if aligned_up else 0)
+    score += 15 if bounce_buy else 0
+    score += 22 if RSI_BUY_MIN <= rsi <= RSI_BUY_MAX else (12 if 20 <= rsi <= 88 else 0)
+    score += clamp((vol_ratio - 0.05) * 20, 0, 16)
+    score += 8 if bull_candle or REQUIRE_BULL_CANDLE != "1" else 0
+    score += clamp((MAX_SPREAD_PCT - spread_pct) * 60, 0, 10)
     if quote_volume_24h >= MIN_24H_QUOTE_VOLUME:
-        score += max(0.0, min(10.0, math.log10(max(quote_volume_24h, 1)) - 5.5))
+        score += max(0.0, min(10.0, math.log10(max(quote_volume_24h, 1)) - 5.0))
     if trend_st.get("trend_ok"):
-        score += 8
-
-    if 0.10 <= atr_pct <= 3.00:
-        score += 10
-    elif 0.03 <= atr_pct <= 8.00:
         score += 5
-
     if regime_ok:
-        score += 5
+        score += 4
+    if 0.03 <= atr_pct <= 6.0:
+        score += 10
 
     return clamp(score, 0.0, 100.0)
 
@@ -1223,14 +1241,14 @@ def adaptive_buy_usdt(score: float, atr_pct: float) -> float:
 
     if atr_pct <= 0:
         vol_factor = 1.0
-    elif atr_pct < 0.20:
-        vol_factor = 0.95
-    elif atr_pct <= 1.80:
-        vol_factor = 1.25
-    elif atr_pct <= 3.00:
+    elif atr_pct < 0.15:
+        vol_factor = 0.90
+    elif atr_pct <= 2.50:
+        vol_factor = 1.20
+    elif atr_pct <= 5.00:
         vol_factor = 1.00
     else:
-        vol_factor = 0.85
+        vol_factor = 0.80
 
     raw = BUY_USDT_MIN + ((BUY_USDT_MAX - BUY_USDT_MIN) * score_factor * vol_factor)
     return clamp(raw, BUY_USDT_MIN, BUY_USDT_MAX)
@@ -1273,7 +1291,7 @@ def safe_buy(exchange, exchange_id: str, sym: str, market_price_hint: float, buy
         return True
 
     _, _, min_notional = get_lot_step(exchange, sym)
-    if min_notional > 0 and buy_amount_usdt < (min_notional + 1.0):
+    if min_notional > 0 and buy_amount_usdt < (min_notional + 0.5):
         return False
 
     usdt_free = get_balance_free(exchange, "USDT")
@@ -1449,7 +1467,7 @@ def collect_exchange_candidates(exchange, exchange_id: str, symbols):
 
             if PRINT_CANDIDATES == "1":
                 print(
-                    f"CANDIDATE {exchange_id} {sym} | paused={trading_paused()} | "
+                    f"CANDIDATE {exchange_id} {sym} | "
                     f"signal={signal} score={score:.2f} need>={BUY_SCORE_MIN:.2f} | "
                     f"rsi={st_ind.get('rsi',0):.2f} | volRatio={st_ind.get('volume_ratio',0):.2f} | "
                     f"spread={spread_pct:.3f} | vol24h={vol_24h:.0f} | "
@@ -1467,7 +1485,8 @@ def collect_exchange_candidates(exchange, exchange_id: str, symbols):
                         "atr_pct": float(st_ind.get("atr_pct", 0.0) or 0.0),
                     }
                 )
-        except Exception:
+        except Exception as e:
+            print(f"SKIP {exchange_id} {sym}: {e}")
             continue
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -1484,136 +1503,131 @@ def process_exchange(exchange, exchange_id: str, symbols):
     for sym in symbols:
         key = pair_key(exchange_id, sym)
 
-        st_ind = refresh_indicators(exchange, exchange_id, sym)
-        trend_st = refresh_trend(exchange, exchange_id, sym)
+        try:
+            st_ind = refresh_indicators(exchange, exchange_id, sym)
+            trend_st = refresh_trend(exchange, exchange_id, sym)
 
-        price = get_price(exchange, sym)
-        spread_pct = get_spread_pct(exchange, sym)
-        vol_24h = get_24h_quote_volume(exchange, sym)
+            price = get_price(exchange, sym)
+            spread_pct = get_spread_pct(exchange, sym)
+            vol_24h = get_24h_quote_volume(exchange, sym)
 
-        base, _ = split_symbol(sym)
-        qty_wallet = get_balance_free(exchange, base)
-        _, _, min_notional = get_lot_step(exchange, sym)
+            base, _ = split_symbol(sym)
+            qty_wallet = get_balance_free(exchange, base)
+            _, _, min_notional = get_lot_step(exchange, sym)
 
-        qty_effective = 0.0 if (DUST_IGNORE == "1" and is_dust(qty_wallet, price, min_notional)) else qty_wallet
+            qty_effective = 0.0 if is_dust(qty_wallet, price, min_notional) else qty_wallet
 
-        if qty_effective > 0:
-            if key not in POSITIONS:
-                sync_one_position(exchange, exchange_id, sym)
-            else:
-                POSITIONS[key]["qty"] = qty_effective
+            if qty_effective > 0:
+                if key not in POSITIONS:
+                    sync_one_position(exchange, exchange_id, sym)
+                else:
+                    POSITIONS[key]["qty"] = qty_effective
 
-        pos_info = POSITIONS.get(key, {}) or {}
-        entry = float(pos_info.get("entry", 0.0) or 0.0)
-        gross = gross_pnl_pct(entry, price) if qty_effective > 0 and entry > 0 else 0.0
-        net = gross - BREAKEVEN_PCT if qty_effective > 0 and entry > 0 else 0.0
+            pos_info = POSITIONS.get(key, {}) or {}
+            entry = float(pos_info.get("entry", 0.0) or 0.0)
+            gross = gross_pnl_pct(entry, price) if qty_effective > 0 and entry > 0 else 0.0
+            net = gross - BREAKEVEN_PCT if qty_effective > 0 and entry > 0 else 0.0
 
-        if qty_effective > 0:
-            update_trailing_state(key, price, net)
+            if qty_effective > 0:
+                update_trailing_state(key, price, net)
 
-        set_status(
-            mode=MODE,
-            last_heartbeat=int(time.time()),
-            symbol=f"{exchange_id} {sym}",
-            price=price,
-            pnl=round(net, 4),
-            position_qty=qty_effective,
-            position_entry=entry,
-            last_action=(
-                f"tick exch={exchange_id} usdt_free={usdt_free:.2f} bot_open={bot_open} "
-                f"rsi={st_ind.get('rsi', 0):.1f} gross={gross:.2f}% net={net:.2f}% "
-                f"trend_ok={trend_st.get('trend_ok', False)} regime_ok={regime_ok} "
-                f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f} "
-                f"volRatio={st_ind.get('volume_ratio', 0):.2f} atr={st_ind.get('atr_pct', 0):.2f}% "
-                f"paused={trading_paused()}"
-            ),
-            last_error="",
-        )
+            set_status(
+                mode=MODE,
+                last_heartbeat=int(time.time()),
+                symbol=f"{exchange_id} {sym}",
+                price=price,
+                pnl=round(net, 4),
+                position_qty=qty_effective,
+                position_entry=entry,
+                last_action=(
+                    f"tick exch={exchange_id} usdt_free={usdt_free:.2f} bot_open={bot_open} "
+                    f"rsi={st_ind.get('rsi', 0):.1f} gross={gross:.2f}% net={net:.2f}% "
+                    f"trend_ok={trend_st.get('trend_ok', False)} regime_ok={regime_ok} "
+                    f"spread={spread_pct:.3f}% vol24h={vol_24h:.0f} "
+                    f"volRatio={st_ind.get('volume_ratio', 0):.2f} atr={st_ind.get('atr_pct', 0):.2f}% "
+                    f"paused={trading_paused()}"
+                ),
+                last_error="",
+            )
 
-        if qty_effective > 0 and not in_cooldown(key):
-            age_h = position_age_hours(key)
-            opened_by_bot = bool(pos_info.get("opened_by_bot", False))
-            partial_tp_done = bool(pos_info.get("partial_tp_done", False))
-            break_even_armed = bool(pos_info.get("break_even_armed", False))
+            if qty_effective > 0 and not in_cooldown(key):
+                age_h = position_age_hours(key)
+                opened_by_bot = bool(pos_info.get("opened_by_bot", False))
+                partial_tp_done = bool(pos_info.get("partial_tp_done", False))
+                break_even_armed = bool(pos_info.get("break_even_armed", False))
 
-            if opened_by_bot:
-                if age_h >= HARD_MAX_HOLD_HOURS:
-                    if safe_sell(exchange, exchange_id, sym, price, f"TIME EXIT hard {age_h:.1f}h net={net:.2f}%"):
+                if opened_by_bot:
+                    if age_h >= HARD_MAX_HOLD_HOURS:
+                        if safe_sell(exchange, exchange_id, sym, price, f"TIME EXIT hard {age_h:.1f}h net={net:.2f}%"):
+                            mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                            time.sleep(1)
+                        continue
+
+                    if age_h >= MAX_HOLD_HOURS and net < TIME_EXIT_MIN_NET_PCT:
+                        if safe_sell(exchange, exchange_id, sym, price, f"TIME EXIT soft {age_h:.1f}h net={net:.2f}%"):
+                            mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                            time.sleep(1)
+                        continue
+
+                if ENABLE_PARTIAL_TP == "1" and not partial_tp_done and net >= PARTIAL_TP_NET_PCT:
+                    part_qty = qty_effective * PARTIAL_TP_SELL_RATIO
+                    if safe_sell(exchange, exchange_id, sym, price, f"PARTIAL TP net={net:.2f}%", force_qty=part_qty):
+                        mark_trade(key, 3)
+                        time.sleep(1)
+                    continue
+
+                if gross >= REQUIRED_GROSS_TP_PCT and net >= MIN_NET_PROFIT_PCT:
+                    if safe_sell(exchange, exchange_id, sym, price, f"SCALP TP gross={gross:.2f}% net={net:.2f}%"):
                         mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
                         time.sleep(1)
                     continue
 
-                if age_h >= MAX_HOLD_HOURS and net < TIME_EXIT_MIN_NET_PCT:
-                    if safe_sell(exchange, exchange_id, sym, price, f"TIME EXIT soft {age_h:.1f}h net={net:.2f}%"):
-                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                        time.sleep(1)
-                    continue
-
-            if ENABLE_PARTIAL_TP == "1" and not partial_tp_done and net >= PARTIAL_TP_NET_PCT:
-                part_qty = qty_effective * PARTIAL_TP_SELL_RATIO
-                if safe_sell(exchange, exchange_id, sym, price, f"PARTIAL TP net={net:.2f}%", force_qty=part_qty):
-                    mark_trade(key, 5)
-                    time.sleep(1)
-                continue
-
-            if gross >= REQUIRED_GROSS_TP_PCT and net >= MIN_NET_PROFIT_PCT:
-                if safe_sell(exchange, exchange_id, sym, price, f"SCALP TP gross={gross:.2f}% net={net:.2f}%"):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
-
-            if ENABLE_TRAILING == "1" and trailing_exit_triggered(key, net):
-                peak_net = float(POSITIONS.get(key, {}).get("peak_net", 0.0) or 0.0)
-
-                giveback_used = TRAILING_GIVEBACK_PCT
-                if SMART_TRAILING == "1":
+                if ENABLE_TRAILING == "1" and trailing_exit_triggered(key, net):
+                    peak_net = float(POSITIONS.get(key, {}).get("peak_net", 0.0) or 0.0)
+                    giveback_used = TRAIL_LVL1_GIVEBACK
                     if peak_net >= TRAIL_LVL3_ACTIVATE:
                         giveback_used = TRAIL_LVL3_GIVEBACK
                     elif peak_net >= TRAIL_LVL2_ACTIVATE:
                         giveback_used = TRAIL_LVL2_GIVEBACK
-                    elif peak_net >= TRAIL_LVL1_ACTIVATE:
-                        giveback_used = TRAIL_LVL1_GIVEBACK
 
-                if safe_sell(
-                    exchange,
-                    exchange_id,
-                    sym,
-                    price,
-                    f"SMART TRAILING peak_net={peak_net:.2f}% net={net:.2f}% giveback={giveback_used:.2f}%"
-                ):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
+                    if safe_sell(exchange, exchange_id, sym, price, f"SMART TRAILING peak_net={peak_net:.2f}% net={net:.2f}% giveback={giveback_used:.2f}%"):
+                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                        time.sleep(1)
+                    continue
 
-            if ENABLE_BREAK_EVEN == "1" and break_even_armed and net <= 0.01:
-                if safe_sell(exchange, exchange_id, sym, price, f"BREAK EVEN EXIT net={net:.2f}%"):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
+                if ENABLE_BREAK_EVEN == "1" and break_even_armed and net <= 0.00:
+                    if safe_sell(exchange, exchange_id, sym, price, f"BREAK EVEN EXIT net={net:.2f}%"):
+                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                        time.sleep(1)
+                    continue
 
-            if gross <= -SL_PCT:
-                if safe_sell(exchange, exchange_id, sym, price, f"SCALP SL gross={gross:.2f}% net={net:.2f}%"):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
+                if gross <= -SL_PCT:
+                    if safe_sell(exchange, exchange_id, sym, price, f"SCALP SL gross={gross:.2f}% net={net:.2f}%"):
+                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                        time.sleep(1)
+                    continue
 
-            if should_exit_early(st_ind) and net >= EARLY_EXIT_MIN_NET_PCT:
-                if safe_sell(exchange, exchange_id, sym, price, f"SCALP early-exit gross={gross:.2f}% net={net:.2f}%"):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
+                if should_exit_early(st_ind) and net >= EARLY_EXIT_MIN_NET_PCT:
+                    if safe_sell(exchange, exchange_id, sym, price, f"SCALP early-exit gross={gross:.2f}% net={net:.2f}%"):
+                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                        time.sleep(1)
+                    continue
 
-            if entry > 0 and gross <= OLD_POSITION_FORCE_SELL_PCT:
-                if safe_sell(exchange, exchange_id, sym, price, f"OLD POSITION FORCE SELL gross={gross:.2f}%"):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
+                if entry > 0 and gross <= OLD_POSITION_FORCE_SELL_PCT:
+                    if safe_sell(exchange, exchange_id, sym, price, f"OLD POSITION FORCE SELL gross={gross:.2f}%"):
+                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                        time.sleep(1)
+                    continue
 
-            if entry > 0 and gross >= OLD_POSITION_TAKE_PROFIT_PCT:
-                if safe_sell(exchange, exchange_id, sym, price, f"OLD POSITION TP gross={gross:.2f}%"):
-                    mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
-                    time.sleep(1)
-                continue
+                if entry > 0 and gross >= OLD_POSITION_TAKE_PROFIT_PCT:
+                    if safe_sell(exchange, exchange_id, sym, price, f"OLD POSITION TP gross={gross:.2f}%"):
+                        mark_trade(key, REENTRY_AFTER_SELL_COOLDOWN_SEC)
+                        time.sleep(1)
+                    continue
+
+        except Exception as e:
+            print(f"PROCESS ERROR {exchange_id} {sym}: {e}")
+            continue
 
 
 # ================== Main ==================
@@ -1621,18 +1635,16 @@ def main():
     init_db()
     reset_daily_guard_if_needed()
 
-    normalized_symbols = [normalize_symbol(s) for s in SYMBOLS]
-
     print(f"🤖 BOT WORKER STARTED MODE={MODE}")
     print(f"🤖 EXCHANGES={','.join(ACTIVE_EXCHANGES)}")
-    print(f"🤖 SYMBOLS={','.join(normalized_symbols)}")
+    print(f"🤖 SYMBOLS={','.join(SYMBOLS)}")
 
     tg_send(
         f"🤖 <b>تم تشغيل البوت</b>\n"
         f"الوضع الحالي: <b>{MODE}</b>\n"
         f"المنصات: <b>{', '.join(ACTIVE_EXCHANGES)}</b>\n"
-        f"عدد الأزواج الأساسية: <b>{len(normalized_symbols)}</b>\n"
-        f"النمط: <b>هجومي</b>"
+        f"عدد الأزواج الأساسية: <b>{len(SYMBOLS)}</b>\n"
+        f"النمط: <b>هجومي جدًا</b>"
     )
 
     exchanges = make_all_exchanges()
@@ -1641,7 +1653,8 @@ def main():
 
     exchange_symbols = {}
     for ex_id, ex in exchanges.items():
-        exchange_symbols[ex_id] = extend_symbols_with_wallet_balances(ex, normalized_symbols)
+        valid_symbols = [s for s in SYMBOLS if s in ex.markets]
+        exchange_symbols[ex_id] = extend_symbols_with_wallet_balances(ex, valid_symbols)
         print(f"📌 {ex_id} managed symbols: {', '.join(exchange_symbols[ex_id])}")
 
     tg_send("✅ TEST: Multi-exchange worker is running now.")
@@ -1693,7 +1706,7 @@ def main():
                         set_status(last_error=err, last_action="error")
                     except Exception:
                         pass
-                    time.sleep(5)
+                    time.sleep(3)
 
             if not trading_paused():
                 for ex_id, ex in exchanges.items():
@@ -1707,13 +1720,7 @@ def main():
                 if STRICT_BEST_GLOBAL_ONLY == "1":
                     chosen = sorted(all_candidates, key=lambda x: x["score"], reverse=True)[:1]
                 else:
-                    chosen = []
-                    seen_ex = set()
-                    for c in sorted(all_candidates, key=lambda x: x["score"], reverse=True):
-                        if ALLOW_ONE_BUY_PER_EXCHANGE == "1" and c["exchange"] in seen_ex:
-                            continue
-                        seen_ex.add(c["exchange"])
-                        chosen.append(c)
+                    chosen = sorted(all_candidates, key=lambda x: x["score"], reverse=True)
 
                 for best in chosen:
                     if buys_done >= MAX_NEW_BUYS_PER_CYCLE:
@@ -1755,7 +1762,7 @@ def main():
                 set_status(last_error=err, last_action="error")
             except Exception:
                 pass
-            time.sleep(10)
+            time.sleep(5)
 
 
 if __name__ == "__main__":
