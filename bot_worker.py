@@ -1,17 +1,34 @@
 import ccxt
 import time
+import requests
+import os
+from dotenv import load_dotenv
 
-# ========= CONFIG =========
-API_KEY = "PUT_YOUR_KEY"
-API_SECRET = "PUT_YOUR_SECRET"
+# تحميل .env
+load_dotenv()
 
-SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"]
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
 
-BUY_USDT = 20
-TP = 0.5   # 0.5%
-SL = -1.2  # -1.2%
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_ID = os.getenv("TG_ID")
 
-# ==========================
+SYMBOLS = os.getenv("SYMBOLS").split(",")
+
+BUY_USDT = float(os.getenv("BUY_USDT", 20))
+TP = float(os.getenv("TP", 0.5))
+SL = float(os.getenv("SL", -1.2))
+
+
+def tg(msg):
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            data={"chat_id": TG_ID, "text": msg}
+        )
+    except:
+        pass
+
 
 exchange = ccxt.binance({
     "apiKey": API_KEY,
@@ -22,11 +39,9 @@ exchange = ccxt.binance({
 
 positions = {}
 
-# ========= INDICATORS =========
 def get_ohlc(symbol):
     ohlc = exchange.fetch_ohlcv(symbol, timeframe="1m", limit=50)
-    closes = [x[4] for x in ohlc]
-    return closes
+    return [x[4] for x in ohlc]
 
 def ema(data, period):
     k = 2 / (period + 1)
@@ -35,7 +50,7 @@ def ema(data, period):
         ema_val = price * k + ema_val * (1 - k)
     return ema_val
 
-def rsi(data, period=14):
+def rsi(data):
     gains, losses = 0, 0
     for i in range(1, len(data)):
         diff = data[i] - data[i-1]
@@ -48,8 +63,9 @@ def rsi(data, period=14):
     rs = gains / losses
     return 100 - (100 / (1 + rs))
 
-# ========= LOOP =========
+
 print("🚀 BOT STARTED")
+tg("🤖 البوت بدأ العمل")
 
 while True:
     try:
@@ -65,11 +81,12 @@ while True:
             if sym not in positions:
                 if e9 > e21 and r > 30:
                     qty = BUY_USDT / price
-
-                    order = exchange.create_market_buy_order(sym, qty)
+                    exchange.create_market_buy_order(sym, qty)
 
                     positions[sym] = price
-                    print(f"🟢 BUY {sym} @ {price}")
+                    msg = f"🟢 BUY {sym}\nPrice: {price}"
+                    print(msg)
+                    tg(msg)
 
             # ===== SELL =====
             else:
@@ -83,7 +100,11 @@ while True:
 
                     if qty > 0:
                         exchange.create_market_sell_order(sym, qty)
-                        print(f"🔴 SELL {sym} @ {price} | {change:.2f}%")
+
+                        msg = f"🔴 SELL {sym}\nPrice: {price}\nP/L: {change:.2f}%"
+                        print(msg)
+                        tg(msg)
+
                         del positions[sym]
 
         time.sleep(5)
