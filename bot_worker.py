@@ -243,8 +243,17 @@ REPORT_INTERVAL_SEC = getenv_int("REPORT_INTERVAL_SEC", 86400)
 SEND_REPORT_ON_EACH_SELL = getenv_str("SEND_REPORT_ON_EACH_SELL", "1")
 SEND_DAILY_REPORT = getenv_str("SEND_DAILY_REPORT", "1")
 
-BUY_SCORE_MIN = getenv_float("BUY_SCORE_MIN", 8.0)
+BUY_SCORE_MIN = getenv_float("BUY_SCORE_MIN", 55.0)
 MAX_CANDIDATES_PER_EXCHANGE = getenv_int("MAX_CANDIDATES_PER_EXCHANGE", 16)
+STRONG_BUY_SCORE = getenv_float("STRONG_BUY_SCORE", 85.0)
+RELAXED_BUY_SCORE = getenv_float("RELAXED_BUY_SCORE", 65.0)
+SOFT_TREND_PENALTY = getenv_float("SOFT_TREND_PENALTY", 14.0)
+SOFT_REGIME_PENALTY = getenv_float("SOFT_REGIME_PENALTY", 12.0)
+ALLOW_STRONG_SCORE_BYPASS = getenv_str("ALLOW_STRONG_SCORE_BYPASS", "1")
+HARD_BLOCK_TREND = getenv_str("HARD_BLOCK_TREND", "0")
+HARD_BLOCK_REGIME = getenv_str("HARD_BLOCK_REGIME", "0")
+MIN_VOL_RATIO_ALIGNED = getenv_float("MIN_VOL_RATIO_ALIGNED", 0.20)
+MIN_VOL_RATIO_CROSS = getenv_float("MIN_VOL_RATIO_CROSS", 0.12)
 
 AUTO_INCLUDE_WALLET_SYMBOLS = getenv_str("AUTO_INCLUDE_WALLET_SYMBOLS", "1")
 ALLOW_ONE_BUY_PER_EXCHANGE = getenv_str("ALLOW_ONE_BUY_PER_EXCHANGE", "0")
@@ -1082,15 +1091,31 @@ def refresh_market_regime(exchange):
 
 
 # ================== Strategy ==================
-def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float, regime_ok: bool = True) -> bool:
+def trend_filter_pass(trend_st, score: float = 0.0) -> bool:
+    trend_ok = bool(trend_st.get("warm")) and bool(trend_st.get("trend_ok"))
+    if trend_ok:
+        return True
+    if HARD_BLOCK_TREND == "1":
+        return False
+    return ALLOW_STRONG_SCORE_BYPASS == "1" and score >= STRONG_BUY_SCORE
+
+
+def regime_filter_pass(regime_ok: bool, score: float = 0.0) -> bool:
+    if regime_ok:
+        return True
+    if HARD_BLOCK_REGIME == "1":
+        return False
+    return ALLOW_STRONG_SCORE_BYPASS == "1" and score >= STRONG_BUY_SCORE
+
+
+def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float, regime_ok: bool = True, score: float = 0.0) -> bool:
     if not st.get("warm"):
         return False
 
-    if REQUIRE_TREND_FILTER == "1":
-        if not trend_st.get("warm") or not trend_st.get("trend_ok"):
-            return False
+    if REQUIRE_TREND_FILTER == "1" and not trend_filter_pass(trend_st, score):
+        return False
 
-    if ENABLE_MARKET_REGIME_FILTER == "1" and not regime_ok:
+    if ENABLE_MARKET_REGIME_FILTER == "1" and not regime_filter_pass(regime_ok, score):
         return False
 
     if spread_pct > MAX_SPREAD_PCT or quote_volume_24h < MIN_24H_QUOTE_VOLUME:
@@ -1116,11 +1141,19 @@ def should_buy_scalp(st, trend_st, spread_pct: float, quote_volume_24h: float, r
     bull_candle_ok = (close >= open_) if REQUIRE_BULL_CANDLE == "1" else True
     volume_ok = vol_ratio >= MIN_VOLUME_RATIO
 
-    return (
-        (cross_up and rsi_ok and bull_candle_ok and volume_ok)
-        or (aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= 0.02)
+    strong_signal = (
+        (cross_up and rsi_ok and bull_candle_ok and vol_ratio >= MIN_VOL_RATIO_CROSS)
+        or (aligned_up and rsi_ok and bull_candle_ok and vol_ratio >= MIN_VOL_RATIO_ALIGNED)
         or bounce_buy
     )
+
+    if strong_signal:
+        return True
+
+    if ALLOW_STRONG_SCORE_BYPASS == "1" and score >= STRONG_BUY_SCORE and rsi_ok:
+        return True
+
+    return False
 
 
 def should_exit_early(st) -> bool:
@@ -1186,13 +1219,6 @@ def calc_buy_score(st, trend_st, spread_pct: float, quote_volume_24h: float, reg
     if not st.get("warm"):
         return 0.0
 
-    if REQUIRE_TREND_FILTER == "1":
-        if not trend_st.get("warm") or not trend_st.get("trend_ok"):
-            return 0.0
-
-    if ENABLE_MARKET_REGIME_FILTER == "1" and not regime_ok:
-        return 0.0
-
     if spread_pct > MAX_SPREAD_PCT or quote_volume_24h < MIN_24H_QUOTE_VOLUME:
         return 0.0
 
@@ -1225,10 +1251,20 @@ def calc_buy_score(st, trend_st, spread_pct: float, quote_volume_24h: float, reg
         score += max(0.0, min(10.0, math.log10(max(quote_volume_24h, 1)) - 5.0))
     if trend_st.get("trend_ok"):
         score += 5
+    elif REQUIRE_TREND_FILTER == "1":
+        score -= SOFT_TREND_PENALTY
+
     if regime_ok:
         score += 4
+    elif ENABLE_MARKET_REGIME_FILTER == "1":
+        score -= SOFT_REGIME_PENALTY
+
     if 0.03 <= atr_pct <= 6.0:
         score += 10
+
+    if ALLOW_STRONG_SCORE_BYPASS == "1":
+        # لا نصفر السكور بسبب الفلاتر؛ فقط نعاقبهما بنقاط ليبقى القرار مرنًا.
+        pass
 
     return clamp(score, 0.0, 100.0)
 
@@ -1427,6 +1463,31 @@ def safe_sell(exchange, exchange_id: str, sym: str, price: float, reason: str, f
     return True
 
 
+def dedupe_candidates(candidates):
+    best_by_key = {}
+    for cand in candidates:
+        key = f"{cand['exchange']}::{cand['symbol']}"
+        prev = best_by_key.get(key)
+        if prev is None or float(cand.get("score", 0.0)) > float(prev.get("score", 0.0)):
+            best_by_key[key] = cand
+    return sorted(best_by_key.values(), key=lambda x: x["score"], reverse=True)
+
+
+def choose_candidates_for_execution(candidates):
+    picked = []
+    used_exchange = set()
+
+    for cand in dedupe_candidates(candidates):
+        ex_id = cand["exchange"]
+        if ALLOW_ONE_BUY_PER_EXCHANGE == "1" and ex_id in used_exchange:
+            continue
+        picked.append(cand)
+        used_exchange.add(ex_id)
+        if STRICT_BEST_GLOBAL_ONLY == "1":
+            break
+    return picked
+
+
 # ================== Candidate Scan ==================
 def collect_exchange_candidates(exchange, exchange_id: str, symbols):
     candidates = []
@@ -1463,7 +1524,7 @@ def collect_exchange_candidates(exchange, exchange_id: str, symbols):
             vol_24h = get_24h_quote_volume(exchange, sym)
 
             score = calc_buy_score(st_ind, trend_st, spread_pct, vol_24h, regime_ok=regime_ok)
-            signal = should_buy_scalp(st_ind, trend_st, spread_pct, vol_24h, regime_ok=regime_ok)
+            signal = should_buy_scalp(st_ind, trend_st, spread_pct, vol_24h, regime_ok=regime_ok, score=score)
 
             if PRINT_CANDIDATES == "1":
                 print(
@@ -1644,7 +1705,7 @@ def main():
         f"الوضع الحالي: <b>{MODE}</b>\n"
         f"المنصات: <b>{', '.join(ACTIVE_EXCHANGES)}</b>\n"
         f"عدد الأزواج الأساسية: <b>{len(SYMBOLS)}</b>\n"
-        f"النمط: <b>هجومي جدًا</b>"
+        f"النمط: <b>هجومي محسّن</b>"
     )
 
     exchanges = make_all_exchanges()
@@ -1717,10 +1778,7 @@ def main():
 
                 buys_done = 0
 
-                if STRICT_BEST_GLOBAL_ONLY == "1":
-                    chosen = sorted(all_candidates, key=lambda x: x["score"], reverse=True)[:1]
-                else:
-                    chosen = sorted(all_candidates, key=lambda x: x["score"], reverse=True)
+                chosen = choose_candidates_for_execution(all_candidates)
 
                 for best in chosen:
                     if buys_done >= MAX_NEW_BUYS_PER_CYCLE:
